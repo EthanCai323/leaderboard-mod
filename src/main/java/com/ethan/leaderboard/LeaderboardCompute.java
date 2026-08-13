@@ -84,8 +84,7 @@ public final class LeaderboardCompute {
                 }
             }
             rows.sort((a, b) -> Long.compare(b.total(), a.total()));
-            leadersItems.put(cat, new ArrayList<>(
-                    rows.subList(0, Math.min(StatFormat.TOP_ITEMS_PER_CATEGORY, rows.size()))));
+            leadersItems.put(cat, rows);
         }
 
         // --- 综合评分 ---
@@ -141,7 +140,8 @@ public final class LeaderboardCompute {
                     c.getOrDefault("minecraft:damage_taken", 0L),
                     distance,
                     categoryTotals.getOrDefault(n, Map.of()).getOrDefault("minecraft:mined", 0L),
-                    categoryTotals.getOrDefault(n, Map.of()).getOrDefault("minecraft:crafted", 0L)));
+                    categoryTotals.getOrDefault(n, Map.of()).getOrDefault("minecraft:crafted", 0L),
+                    c.getOrDefault("minecraft:aviate_one_cm", 0L)));
         }
 
         List<String> overall = new ArrayList<>(players);

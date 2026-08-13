@@ -1,8 +1,12 @@
 package com.ethan.leaderboard;
 
+import net.minecraft.component.DataComponentTypes;
+import net.minecraft.entity.EntityType;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.item.PotionItem;
+import net.minecraft.item.SpawnEggItem;
 import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
@@ -90,5 +94,31 @@ final class LeaderboardGuiItems {
     static Item resolveStatItem(String stat, String category) {
         Optional<Item> item = Registries.ITEM.getOptionalValue(Identifier.of(stat));
         return item.filter(i -> i != Items.AIR).orElse(iconForCategory(category));
+    }
+
+    /** 生物明细：尽量用对应生物的刷怪蛋，取不到用骷髅头兜底 */
+    static Item spawnEggFor(String entityStatId) {
+        Optional<EntityType<?>> type = Registries.ENTITY_TYPE.getOptionalValue(Identifier.of(entityStatId));
+        if (type.isPresent()) {
+            SpawnEggItem egg = SpawnEggItem.forEntity(type.get());
+            if (egg != null) {
+                return egg;
+            }
+        }
+        return Items.SKELETON_SKULL;
+    }
+
+    /**
+     * 食物与饮品判定：物品组件含 FOOD，或为药水类（普通/喷溅/滞留），
+     * 或为不祥之瓶、牛奶桶。
+     */
+    static boolean isFoodOrDrink(Item item) {
+        if (item == Items.MILK_BUCKET || item == Items.OMINOUS_BOTTLE) {
+            return true;
+        }
+        if (item instanceof PotionItem) {
+            return true;
+        }
+        return item.getDefaultStack().getComponents().contains(DataComponentTypes.FOOD);
     }
 }

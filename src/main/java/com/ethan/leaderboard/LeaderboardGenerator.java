@@ -36,6 +36,7 @@ public final class LeaderboardGenerator {
 
     private static volatile LeaderboardData lastData;
     private static volatile String lastUpdated;
+    private static volatile Map<String, Boolean> lastAllPlayers = Map.of();
 
     private LeaderboardGenerator() {
     }
@@ -48,8 +49,18 @@ public final class LeaderboardGenerator {
         return lastUpdated;
     }
 
+    /** 最近一次生成时所有有统计记录的玩家：名字 -> 是否被包含（供 player list all） */
+    public static Map<String, Boolean> getLastAllPlayers() {
+        return lastAllPlayers;
+    }
+
     public static synchronized boolean generate(MinecraftServer server) {
         try {
+            // 热加载配置、名单与翻译表
+            LeaderboardConfig.load();
+            PlayerFilter.load();
+            Lang.reload();
+
             Path statsDir = server.getSavePath(WorldSavePath.ROOT).resolve("stats");
             if (!Files.isDirectory(statsDir)) {
                 ServerLeaderboardMod.LOGGER.warn("[排行榜] 找不到统计目录: {}", statsDir);
@@ -73,10 +84,11 @@ public final class LeaderboardGenerator {
                 }
             }
 
-            // --- 解析 UUID -> 名字，排除假人 ---
+            // --- 解析 UUID -> 名字，按白名单/黑名单/bot_ 前缀过滤 ---
             Map<String, String> fileNames = loadUserCacheFile();
             Map<String, Map<String, Map<String, Long>>> allStats = new LinkedHashMap<>();
-            List<String> bots = new ArrayList<>();
+            Map<String, Boolean> allPlayers = new LinkedHashMap<>();
+            List<String> excluded = new ArrayList<>();
             int unknown = 0;
             for (Map.Entry<String, Map<String, Map<String, Long>>> e : raw.entrySet()) {
                 String uuidStr = e.getKey();
@@ -85,14 +97,17 @@ public final class LeaderboardGenerator {
                     name = "未知玩家-" + uuidStr.substring(0, Math.min(8, uuidStr.length()));
                     unknown++;
                 }
-                if (name.toLowerCase(Locale.ROOT).startsWith(StatFormat.BOT_PREFIX)) {
-                    bots.add(name);
+                boolean included = PlayerFilter.isIncluded(name);
+                allPlayers.put(name, included);
+                if (!included) {
+                    excluded.add(name);
                     continue;
                 }
                 allStats.put(name, e.getValue());
             }
-            if (!bots.isEmpty()) {
-                ServerLeaderboardMod.LOGGER.info("[排行榜] 已排除假人 {} 个: {}", bots.size(), String.join(", ", bots));
+            lastAllPlayers = allPlayers;
+            if (!excluded.isEmpty()) {
+                ServerLeaderboardMod.LOGGER.info("[排行榜] 已排除 {} 个玩家: {}", excluded.size(), String.join(", ", excluded));
             }
             if (unknown > 0) {
                 ServerLeaderboardMod.LOGGER.info("[排行榜] 有 {} 个 UUID 未找到名字", unknown);
@@ -220,7 +235,9 @@ public final class LeaderboardGenerator {
         JsonObject cats = new JsonObject();
         for (Map.Entry<String, List<LeaderboardData.ItemRow>> e : data.leadersItems.entrySet()) {
             JsonArray rows = new JsonArray();
-            for (LeaderboardData.ItemRow row : e.getValue()) {
+            List<LeaderboardData.ItemRow> catRows = e.getValue();
+            int limit = Math.min(StatFormat.TOP_ITEMS_PER_CATEGORY, catRows.size());
+            for (LeaderboardData.ItemRow row : catRows.subList(0, limit)) {
                 LeaderboardData.Entry top = row.ranking().get(0);
                 JsonObject o = new JsonObject();
                 o.addProperty("item", row.stat());
@@ -247,6 +264,7 @@ public final class LeaderboardGenerator {
             o.addProperty("distance", ps.distance());
             o.addProperty("mined_total", ps.minedTotal());
             o.addProperty("crafted_total", ps.craftedTotal());
+            o.addProperty("aviate", ps.aviate());
             players.add(o);
         }
         root.add("players", players);

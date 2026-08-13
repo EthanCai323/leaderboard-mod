@@ -123,7 +123,8 @@ public final class HtmlReport {
                 continue;
             }
             StringBuilder trs = new StringBuilder();
-            for (LeaderboardData.ItemRow row : rowsCat) {
+            int limit = Math.min(StatFormat.TOP_ITEMS_PER_CATEGORY, rowsCat.size());
+            for (LeaderboardData.ItemRow row : rowsCat.subList(0, limit)) {
                 String stat = row.stat();
                 List<LeaderboardData.Entry> ranking = row.ranking();
                 LeaderboardData.Entry king = ranking.get(0);

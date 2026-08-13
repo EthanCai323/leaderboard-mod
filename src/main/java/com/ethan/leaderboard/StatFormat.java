@@ -39,6 +39,8 @@ public final class StatFormat {
         m.put("minecraft:damage_dealt", "造成伤害");
         m.put("minecraft:damage_taken", "承受伤害");
         m.put("minecraft:damage_blocked_by_shield", "盾牌格挡伤害");
+        m.put("minecraft:damage_absorbed", "吸收伤害");
+        m.put("minecraft:damage_resisted", "抵抗伤害");
         m.put("minecraft:jump", "跳跃次数");
         m.put("minecraft:drop", "丢弃物品");
         m.put("minecraft:walk_one_cm", "步行距离");
@@ -48,12 +50,13 @@ public final class StatFormat {
         m.put("minecraft:swim_one_cm", "游泳距离");
         m.put("minecraft:climb_one_cm", "攀爬距离");
         m.put("minecraft:crouch_one_cm", "潜行移动距离");
-        m.put("minecraft:aviate_one_cm", "鞘翅滑翔距离");
+        m.put("minecraft:aviate_one_cm", "鞘翅飞行");
         m.put("minecraft:boat_one_cm", "划船距离");
         m.put("minecraft:horse_one_cm", "骑马距离");
         m.put("minecraft:minecart_one_cm", "矿车距离");
         m.put("minecraft:pig_one_cm", "骑猪距离");
         m.put("minecraft:strider_one_cm", "骑炽足兽距离");
+        m.put("minecraft:happy_ghast_one_cm", "骑乘快乐恶魂距离");
         m.put("minecraft:walk_on_water_one_cm", "水面行走距离");
         m.put("minecraft:walk_under_water_one_cm", "水下行走距离");
         m.put("minecraft:sneak_time", "潜行时间");

@@ -30,6 +30,7 @@ public class LeaderboardData {
     }
 
     public record PlayerSummary(long playTime, long deaths, long mobKills, long damageDealt,
-                                long damageTaken, long distance, long minedTotal, long craftedTotal) {
+                                long damageTaken, long distance, long minedTotal, long craftedTotal,
+                                long aviate) {
     }
 }
