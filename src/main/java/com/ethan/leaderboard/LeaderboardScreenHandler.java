@@ -46,12 +46,14 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
     /** 普通模式下每个子分类明细最多展示的条目数 */
     private static final int NORMAL_MODE_DETAIL_LIMIT = 36;
 
-    /** 物品组 / 食物与饮品组的 6 个子分类 */
+    /** 物品组的 6 个子分类（食物饮品仅在"使用"子分类中被排除，归"食物与饮品"） */
     private static final List<String> ITEM_CATEGORIES = List.of(
             "minecraft:mined", "minecraft:crafted", "minecraft:used",
             "minecraft:broken", "minecraft:picked_up", "minecraft:dropped");
     /** 生物组的 2 个子分类 */
     private static final List<String> MOB_CATEGORIES = List.of("minecraft:killed", "minecraft:killed_by");
+    /** 食物与饮品组：仅"使用"一个子分类，点击标签页直接进入明细 */
+    private static final List<String> FOOD_CATEGORIES = List.of("minecraft:used");
 
     private enum View {
         LEADERBOARD, KINGS, GROUP_LIST, GROUP_DETAIL
@@ -160,6 +162,12 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
     private void openGroup(Group target) {
         group = target;
         detailCategory = -1;
+        if (target == Group.FOOD) {
+            // 食物与饮品只有"使用"一个子分类，点击标签页直接进入明细
+            detailCategory = 0;
+            switchView(View.GROUP_DETAIL);
+            return;
+        }
         switchView(View.GROUP_LIST);
     }
 
@@ -197,12 +205,14 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
         } else if (view == View.GROUP_DETAIL) {
             List<LeaderboardData.ItemRow> rows = currentCategoryRows();
             List<LeaderboardData.ItemRow> list = new ArrayList<>();
+            String category = groupCategories().get(detailCategory);
             for (LeaderboardData.ItemRow row : rows) {
                 if (!isEntryShown(row.stat())) {
                     continue;
                 }
                 boolean food = isFoodStat(row.stat());
-                if (group == Group.ITEMS && food) {
+                // 物品组仅在"使用"子分类排除食物饮品（食物使用排行归"食物与饮品"组），其余子分类照常显示
+                if (group == Group.ITEMS && food && "minecraft:used".equals(category)) {
                     continue;
                 }
                 if (group == Group.FOOD && !food) {
@@ -233,7 +243,11 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
     }
 
     private List<String> groupCategories() {
-        return group == Group.MOBS ? MOB_CATEGORIES : ITEM_CATEGORIES;
+        return switch (group) {
+            case MOBS -> MOB_CATEGORIES;
+            case FOOD -> FOOD_CATEGORIES;
+            case ITEMS -> ITEM_CATEGORIES;
+        };
     }
 
     private List<LeaderboardData.ItemRow> currentCategoryRows() {
@@ -278,7 +292,7 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
         }
     }
 
-    /** 分组列表：物品 6 类 / 生物 2 类 / 食物与饮品 6 类 */
+    /** 分组列表：物品 6 类 / 生物 2 类 / 食物与饮品 1 类（食物通常直通明细，仅点返回时可见） */
     private void renderGroupList() {
         List<String> cats = groupCategories();
         for (int i = 0; i < cats.size(); i++) {

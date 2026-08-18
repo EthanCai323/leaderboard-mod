@@ -27,6 +27,7 @@ import static net.minecraft.server.command.CommandManager.literal;
  * /leaderboard player list [all]      玩家名单（仅 OP）
  * /leaderboard player add/remove <名> 白/黑名单（仅 OP）
  * /leaderboard scoreboard on|off      个人侧边计分板（任何玩家）
+ * /leaderboard help                   指令帮助（任何玩家；OP 追加显示管理指令）
  */
 public final class LeaderboardCommands {
     private static final Pattern INTERVAL_PATTERN = Pattern.compile("^(\\d+)(t|s|m|h)?$");
@@ -63,6 +64,7 @@ public final class LeaderboardCommands {
                                         .then(argument("name", StringArgumentType.word())
                                                 .executes(ctx -> playerRemove(ctx.getSource(),
                                                         StringArgumentType.getString(ctx, "name"))))))
+                        .then(literal("help").executes(ctx -> help(ctx.getSource())))
                         .then(literal("scoreboard")
                                 .then(literal("on")
                                         .executes(ctx -> scoreboard(ctx.getSource(), true)))
@@ -305,6 +307,33 @@ public final class LeaderboardCommands {
         }
         SidebarScoreboards.setEnabled(player, on);
         src.sendMessage(Text.literal(on ? "已开启侧边计分板" : "已关闭侧边计分板").formatted(Formatting.GREEN));
+        return 1;
+    }
+
+    // ---------- help ----------
+
+    /** 指令帮助：公共指令人人可见，OP 追加显示管理指令 */
+    private static int help(ServerCommandSource src) {
+        src.sendMessage(Text.literal("—— 排行榜指令帮助 ——").formatted(Formatting.GOLD));
+        src.sendMessage(Text.literal("/leaderboard - 打开排行榜界面（控制台输出文字版）")
+                .formatted(Formatting.GRAY));
+        src.sendMessage(Text.literal("/leaderboard scoreboard on|off - 开启/关闭个人侧边计分板")
+                .formatted(Formatting.GRAY));
+        src.sendMessage(Text.literal("/leaderboard help - 显示本帮助")
+                .formatted(Formatting.GRAY));
+        if (src.hasPermissionLevel(2)) {
+            src.sendMessage(Text.literal("以下仅 OP 可用：").formatted(Formatting.GOLD));
+            src.sendMessage(Text.literal("/leaderboard refresh - 手动刷新排行榜")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard refresh interval <数字>[t|s|m|h] - 设置自动刷新间隔")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard mode <compact|normal|full|custom> - 切换显示模式")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard player list [all] - 查看玩家名单")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard player add/remove <玩家名> - 管理白/黑名单")
+                    .formatted(Formatting.GRAY));
+        }
         return 1;
     }
 }
