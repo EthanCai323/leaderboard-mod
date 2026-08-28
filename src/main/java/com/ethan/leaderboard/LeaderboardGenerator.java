@@ -5,9 +5,10 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.mojang.authlib.GameProfile;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.PlayerConfigEntry;
+import net.minecraft.util.NameToIdCache;
 import net.minecraft.util.WorldSavePath;
 
 import java.io.IOException;
@@ -161,15 +162,15 @@ public final class LeaderboardGenerator {
         return out;
     }
 
-    /** 名字解析：优先服务器 UserCache，其次 usercache.json 文件 */
+    /** 名字解析：优先服务器 NameToIdCache（原 UserCache），其次 usercache.json 文件 */
     private static String resolveName(MinecraftServer server, String uuidStr, Map<String, String> fileNames) {
         try {
             UUID uuid = UUID.fromString(uuidStr);
-            var cache = server.getUserCache();
+            NameToIdCache cache = server.getApiServices().nameToIdCache();
             if (cache != null) {
-                Optional<GameProfile> profile = cache.getByUuid(uuid);
-                if (profile.isPresent() && profile.get().getName() != null) {
-                    return profile.get().getName();
+                Optional<PlayerConfigEntry> entry = cache.getByUuid(uuid);
+                if (entry.isPresent() && entry.get().name() != null) {
+                    return entry.get().name();
                 }
             }
         } catch (Exception ignored) {

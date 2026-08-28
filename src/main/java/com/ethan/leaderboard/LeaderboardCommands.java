@@ -3,6 +3,8 @@ package com.ethan.leaderboard;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.CommandSource;
+import net.minecraft.command.permission.Permission;
+import net.minecraft.command.permission.PermissionLevel;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
@@ -74,7 +76,7 @@ public final class LeaderboardCommands {
 
     /** OP 检查：非 OP 提示红色错误 */
     private static boolean notOp(ServerCommandSource src) {
-        if (src.hasPermissionLevel(2)) {
+        if (src.getPermissions().hasPermission(new Permission.Level(PermissionLevel.fromLevel(2)))) {
             return false;
         }
         src.sendMessage(Text.literal("仅 OP 可用此指令").formatted(Formatting.RED));
@@ -321,7 +323,7 @@ public final class LeaderboardCommands {
                 .formatted(Formatting.GRAY));
         src.sendMessage(Text.literal("/leaderboard help - 显示本帮助")
                 .formatted(Formatting.GRAY));
-        if (src.hasPermissionLevel(2)) {
+        if (src.getPermissions().hasPermission(new Permission.Level(PermissionLevel.fromLevel(2)))) {
             src.sendMessage(Text.literal("以下仅 OP 可用：").formatted(Formatting.GOLD));
             src.sendMessage(Text.literal("/leaderboard refresh - 手动刷新排行榜")
                     .formatted(Formatting.GRAY));

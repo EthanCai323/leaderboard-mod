@@ -141,7 +141,7 @@ public final class SidebarScoreboards {
                     pb.objective(), ScoreboardObjectiveUpdateS2CPacket.REMOVE_MODE));
         }
         // 恢复服务器主计分板的侧边栏显示（若主计分板本身有侧边栏目标）
-        MinecraftServer server = player.getServer();
+        MinecraftServer server = player.getEntityWorld().getServer();
         if (server != null) {
             ScoreboardObjective main = server.getScoreboard().getObjectiveForSlot(ScoreboardDisplaySlot.SIDEBAR);
             if (main != null) {

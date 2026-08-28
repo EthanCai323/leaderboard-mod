@@ -1,6 +1,5 @@
 package com.ethan.leaderboard;
 
-import com.mojang.authlib.properties.PropertyMap;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.LoreComponent;
 import net.minecraft.component.type.ProfileComponent;
@@ -361,8 +360,7 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
 
     private ItemStack playerHead(String name) {
         ItemStack stack = new ItemStack(Items.PLAYER_HEAD);
-        stack.set(DataComponentTypes.PROFILE,
-                new ProfileComponent(Optional.of(name), Optional.empty(), new PropertyMap()));
+        stack.set(DataComponentTypes.PROFILE, ProfileComponent.ofDynamic(name));
         return stack;
     }
 
