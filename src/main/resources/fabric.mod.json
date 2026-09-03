@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "server-leaderboard",
-  "version": "1.1.0+mc1.21.7",
+  "version": "1.2.0+mc1.21.7",
   "name": "Server Leaderboard",
   "description": "每小时自动统计玩家数据，生成排行榜网页与 JSON，并提供 /leaderboard 指令。",
   "authors": ["Ethan"],
@@ -13,7 +13,7 @@
   "depends": {
     "fabricloader": ">=0.19.3",
     "minecraft": "~1.21.7",
-    "fabric-api": "*",
+    "fabric-api": ">=0.129.0",
     "java": ">=21"
   }
 }

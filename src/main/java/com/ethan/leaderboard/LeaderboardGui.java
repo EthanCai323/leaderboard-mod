@@ -14,9 +14,10 @@ public final class LeaderboardGui {
     }
 
     public static void open(ServerPlayerEntity player, LeaderboardData data) {
-        // 打开时热加载翻译表与自定义显示配置，文件改动即时生效
-        Lang.reload();
-        CustomDisplay.load();
+        // 打开时按文件修改时间懒加载翻译表、统计名表与自定义显示配置，文件改动即时生效
+        Lang.reloadIfChanged();
+        StatFormat.loadStatNamesIfChanged();
+        CustomDisplay.loadIfChanged();
         SimpleInventory inventory = new SimpleInventory(54);
         player.openHandledScreen(new SimpleNamedScreenHandlerFactory(
                 (syncId, playerInventory, p) -> {

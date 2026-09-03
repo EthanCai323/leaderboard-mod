@@ -157,14 +157,7 @@ public final class LeaderboardCompute {
             return a.compareTo(b);
         });
 
-        LeaderboardData data = new LeaderboardData();
-        data.leadersCustom = leadersCustom;
-        data.leadersItems = leadersItems;
-        data.overall = overall;
-        data.score = score;
-        data.titles = titles;
-        data.playerSummary = playerSummary;
-        return data;
+        return new LeaderboardData(leadersCustom, leadersItems, overall, score, titles, playerSummary);
     }
 
     /** 按名次给分：第 1 名 N 分，第 2 名 N-1 分……并列同名次；并列第一都算冠军 */

@@ -3,28 +3,21 @@ package com.ethan.leaderboard;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonParser;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.item.Item;
 import net.minecraft.network.packet.s2c.play.ScoreboardDisplayS2CPacket;
 import net.minecraft.network.packet.s2c.play.ScoreboardObjectiveUpdateS2CPacket;
 import net.minecraft.network.packet.s2c.play.ScoreboardScoreUpdateS2CPacket;
-import net.minecraft.registry.Registries;
 import net.minecraft.scoreboard.Scoreboard;
 import net.minecraft.scoreboard.ScoreboardCriterion;
 import net.minecraft.scoreboard.ScoreboardDisplaySlot;
 import net.minecraft.scoreboard.ScoreboardObjective;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.stat.StatHandler;
-import net.minecraft.stat.Stats;
 import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
-import net.minecraft.block.Block;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -34,16 +27,14 @@ import java.util.UUID;
 /**
  * 个人侧边计分板：每个开启的玩家持有独立的 Scoreboard 实例，
  * 通过计分板数据包下发，各人只看得到自己的数据。
- * 数据源为在线玩家 StatHandler 实时值，每 20 tick 刷新一次。
+ * 数据源为最近一次排行榜生成时从 stats JSON 求和得到的玩家总览，
+ * 每 20 tick 刷新一次（数据本身随排行榜刷新而更新）。
  * 开启状态持久化到 leaderboard/scoreboard.json。
+ * OP 可通过 /leaderboard allowscoreboard false 禁止普通玩家开启。
  */
 public final class SidebarScoreboards {
     private static final String OBJECTIVE_NAME = "lb_sidebar";
     private static final String TITLE = "我的数据";
-
-    /** 距离类 custom 统计（*_one_cm），与 compute() 的 distance 口径一致 */
-    private static final List<String> DISTANCE_STATS = StatFormat.CUSTOM_STAT_NAMES.keySet().stream()
-            .filter(k -> k.endsWith("_one_cm")).toList();
 
     private static final Set<String> enabled = new LinkedHashSet<>();
     private static final Map<UUID, PlayerBoard> boards = new HashMap<>();
@@ -97,7 +88,19 @@ public final class SidebarScoreboards {
         return enabled.contains(name.toLowerCase(Locale.ROOT));
     }
 
-    public static void setEnabled(ServerPlayerEntity player, boolean on) {
+    /** 玩家是否允许开启侧边计分板（OP 不受 allowScoreboard 限制） */
+    public static boolean mayUse(ServerPlayerEntity player) {
+        return LeaderboardConfig.get().allowScoreboard || player.hasPermissionLevel(2);
+    }
+
+    /**
+     * 开关个人侧边计分板。
+     * 返回 false 表示被 allowScoreboard=false 拦截（未做任何变更）。
+     */
+    public static boolean setEnabled(ServerPlayerEntity player, boolean on) {
+        if (on && !mayUse(player)) {
+            return false;
+        }
         String key = player.getNameForScoreboard().toLowerCase(Locale.ROOT);
         if (on) {
             enabled.add(key);
@@ -107,10 +110,33 @@ public final class SidebarScoreboards {
             remove(player);
         }
         save();
+        return true;
+    }
+
+    /**
+     * allowScoreboard 被切为 false 时调用：关闭所有非 OP 玩家已开启的计分板。
+     */
+    public static void disableAllForNonOps(MinecraftServer server) {
+        boolean changed = false;
+        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+            if (player.hasPermissionLevel(2)) {
+                continue;
+            }
+            String key = player.getNameForScoreboard().toLowerCase(Locale.ROOT);
+            if (enabled.remove(key)) {
+                changed = true;
+            }
+            remove(player);
+            player.sendMessage(Text.literal("管理员已关闭个人侧边计分板")
+                    .formatted(net.minecraft.util.Formatting.RED), false);
+        }
+        if (changed) {
+            save();
+        }
     }
 
     public static void onJoin(ServerPlayerEntity player) {
-        if (isEnabled(player.getNameForScoreboard())) {
+        if (isEnabled(player.getNameForScoreboard()) && mayUse(player)) {
             apply(player);
         }
     }
@@ -165,30 +191,25 @@ public final class SidebarScoreboards {
         }
     }
 
+    /** 从最近一次排行榜生成的玩家总览取数，不再每 tick 遍历注册表 */
     private static void update(ServerPlayerEntity player) {
         PlayerBoard pb = boards.get(player.getUuid());
         if (pb == null) {
             return;
         }
-        StatHandler stats = player.getStatHandler();
-        long playTime = customStat(stats, "minecraft:play_time");
-        long deaths = customStat(stats, "minecraft:deaths");
-        long mobKills = customStat(stats, "minecraft:mob_kills");
-        long damageDealt = customStat(stats, "minecraft:damage_dealt");
-        long damageTaken = customStat(stats, "minecraft:damage_taken");
-        long aviate = customStat(stats, "minecraft:aviate_one_cm");
-        long distance = 0;
-        for (String id : DISTANCE_STATS) {
-            distance += customStat(stats, id);
-        }
-        long mined = 0;
-        for (Block block : Registries.BLOCK) {
-            mined += stats.getStat(Stats.MINED, block);
-        }
-        long crafted = 0;
-        for (Item item : Registries.ITEM) {
-            crafted += stats.getStat(Stats.CRAFTED, item);
-        }
+        LeaderboardData data = LeaderboardGenerator.getLastData();
+        LeaderboardData.PlayerSummary ps = data == null
+                ? null
+                : data.getPlayerSummary().get(player.getGameProfile().getName());
+        long playTime = ps == null ? 0 : ps.playTime();
+        long deaths = ps == null ? 0 : ps.deaths();
+        long mobKills = ps == null ? 0 : ps.mobKills();
+        long damageDealt = ps == null ? 0 : ps.damageDealt();
+        long damageTaken = ps == null ? 0 : ps.damageTaken();
+        long distance = ps == null ? 0 : ps.distance();
+        long mined = ps == null ? 0 : ps.minedTotal();
+        long crafted = ps == null ? 0 : ps.craftedTotal();
+        long aviate = ps == null ? 0 : ps.aviate();
 
         send(player, pb, "游戏时间(小时)", clampInt(playTime / 72000));
         send(player, pb, "死亡次数", clampInt(deaths));
@@ -199,15 +220,6 @@ public final class SidebarScoreboards {
         send(player, pb, "挖掘", clampInt(mined));
         send(player, pb, "合成", clampInt(crafted));
         send(player, pb, "鞘翅飞行(米)", clampInt(aviate / 100));
-    }
-
-    private static long customStat(StatHandler stats, String id) {
-        // StatType 内部用 IdentityHashMap 缓存统计项，必须传入注册表里的规范 Identifier 实例，
-        // 直接传 Identifier.of(id) 新建实例会导致 hasStat 永远为 false、读到 0。
-        Identifier key = Identifier.of(id);
-        return Registries.CUSTOM_STAT.getOptionalValue(key)
-                .map(canonical -> (long) stats.getStat(Stats.CUSTOM, canonical))
-                .orElse(0L);
     }
 
     private static int clampInt(long value) {

@@ -1,9 +1,7 @@
 package com.ethan.leaderboard;
 
-import com.mojang.authlib.properties.PropertyMap;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.LoreComponent;
-import net.minecraft.component.type.ProfileComponent;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.inventory.SimpleInventory;
@@ -14,6 +12,7 @@ import net.minecraft.registry.Registries;
 import net.minecraft.screen.GenericContainerScreenHandler;
 import net.minecraft.screen.ScreenHandlerType;
 import net.minecraft.screen.slot.SlotActionType;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.Identifier;
 
@@ -27,8 +26,9 @@ import java.util.Optional;
  *
  * 底行导航（45-53）：
  * 45 排行榜 / 46 通用 / 47 物品 / 48 生物 / 49 食物与饮品
- * 50 返回（仅明细视图，光灵箭）/ 51 上一页 / 52 下一页 / 53 关闭（屏障，始终显示）
+ * 50 返回（仅非食物的明细视图，钓鱼竿）/ 51 上一页 / 52 下一页 / 53 关闭（屏障，始终显示）
  * 精简模式下只有 45 和 53。
+ * 底行选中项有附魔光效，未选中项没有。
  */
 public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
     private static final int CONTENT_SLOTS = 45;
@@ -65,6 +65,7 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
 
     private final SimpleInventory inventory;
     private final LeaderboardData data;
+    private final MinecraftServer server;
     private final String mode;
     private final boolean compact;
     private View view = View.LEADERBOARD;
@@ -81,6 +82,7 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
         super(ScreenHandlerType.GENERIC_9X6, syncId, playerInventory, inventory, 6);
         this.inventory = inventory;
         this.data = data;
+        this.server = playerInventory.player.getServer();
         this.mode = LeaderboardConfig.get().displayMode;
         this.compact = LeaderboardConfig.MODE_COMPACT.equals(this.mode);
     }
@@ -119,7 +121,7 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
                 }
             }
             case SLOT_BACK -> {
-                if (view == View.GROUP_DETAIL) {
+                if (view == View.GROUP_DETAIL && group != Group.FOOD) {
                     switchView(View.GROUP_LIST);
                 }
             }
@@ -196,7 +198,7 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
         shownDetail = List.of();
         if (view == View.KINGS) {
             List<LeaderboardData.CustomLeader> list = new ArrayList<>();
-            for (LeaderboardData.CustomLeader leader : data.leadersCustom) {
+            for (LeaderboardData.CustomLeader leader : data.getLeadersCustom()) {
                 if (isEntryShown(leader.stat())) {
                     list.add(leader);
                 }
@@ -254,13 +256,13 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
         if (detailCategory < 0 || detailCategory >= groupCategories().size()) {
             return List.of();
         }
-        List<LeaderboardData.ItemRow> rows = data.leadersItems.get(groupCategories().get(detailCategory));
+        List<LeaderboardData.ItemRow> rows = data.getLeadersItems().get(groupCategories().get(detailCategory));
         return rows == null ? List.of() : rows;
     }
 
     private int totalItems() {
         return switch (view) {
-            case LEADERBOARD -> data.overall.size();
+            case LEADERBOARD -> data.getOverall().size();
             case KINGS -> shownKings.size();
             case GROUP_DETAIL -> shownDetail.size();
             case GROUP_LIST -> 0;
@@ -269,7 +271,7 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
 
     private int pageCount() {
         if (compact) {
-            return Math.max(1, (data.overall.size() + CONTENT_SLOTS - 1) / CONTENT_SLOTS);
+            return Math.max(1, (data.getOverall().size() + CONTENT_SLOTS - 1) / CONTENT_SLOTS);
         }
         return Math.max(1, (totalItems() + CONTENT_SLOTS - 1) / CONTENT_SLOTS);
     }
@@ -277,9 +279,9 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
     /** 排行榜视图：玩家头颅分页（compact 时 lore 只有 9 项数据） */
     private void renderLeaderboard(boolean compactLore) {
         int start = page * CONTENT_SLOTS;
-        for (int i = 0; i < CONTENT_SLOTS && start + i < data.overall.size(); i++) {
+        for (int i = 0; i < CONTENT_SLOTS && start + i < data.getOverall().size(); i++) {
             int index = start + i;
-            String name = data.overall.get(index);
+            String name = data.getOverall().get(index);
             inventory.setStack(i, buildLeaderboardHead(name, index + 1, compactLore));
         }
     }
@@ -292,7 +294,7 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
         }
     }
 
-    /** 分组列表：物品 6 类 / 生物 2 类 / 食物与饮品 1 类（食物通常直通明细，仅点返回时可见） */
+    /** 分组列表：物品 6 类 / 生物 2 类 / 食物与饮品 1 类（食物直通明细，无分组列表） */
     private void renderGroupList() {
         List<String> cats = groupCategories();
         for (int i = 0; i < cats.size(); i++) {
@@ -315,7 +317,7 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
         }
     }
 
-    /** 底行导航栏 */
+    /** 底行导航栏：选中的分类有附魔光效，未选中的没有 */
     private void renderNav() {
         inventory.setStack(SLOT_LEADERBOARD, navItem(new ItemStack(Items.CLOCK), "排行榜",
                 compact || view == View.LEADERBOARD));
@@ -327,33 +329,54 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
                     group == Group.MOBS && isGroupView()));
             inventory.setStack(SLOT_FOOD, navItem(new ItemStack(Items.APPLE), "食物与饮品",
                     group == Group.FOOD && isGroupView()));
-            if (view == View.GROUP_DETAIL) {
-                inventory.setStack(SLOT_BACK, navItem(new ItemStack(Items.SPECTRAL_ARROW), "返回分类列表", false));
+            // 食物与饮品直通明细且无小分类，不提供返回按钮
+            if (view == View.GROUP_DETAIL && group != Group.FOOD) {
+                inventory.setStack(SLOT_BACK, navItem(new ItemStack(Items.FISHING_ROD), "返回", false));
             }
         }
-        if (pageCount() > 1) {
-            if (page > 0) {
-                inventory.setStack(SLOT_PREV, navItem(new ItemStack(Items.ARROW),
-                        "上一页（第 " + page + "/" + pageCount() + " 页）", false));
-            }
-            if (page < pageCount() - 1) {
-                inventory.setStack(SLOT_NEXT, navItem(new ItemStack(Items.ARROW),
-                        "下一页（第 " + (page + 2) + "/" + pageCount() + " 页）", false));
-            }
-        }
+        renderPagination();
         inventory.setStack(SLOT_CLOSE, navItem(new ItemStack(Items.BARRIER), "关闭", false));
+    }
+
+    /** 分页按钮：首页上一页为灰色普通箭矢（点击无效），末页下一页同理，其余为光灵箭 */
+    private void renderPagination() {
+        if (pageCount() <= 1) {
+            return;
+        }
+        boolean hasPrev = page > 0;
+        boolean hasNext = page < pageCount() - 1;
+        inventory.setStack(SLOT_PREV, pageItem(hasPrev ? Items.SPECTRAL_ARROW : Items.ARROW,
+                "上一页", hasPrev, page, page + 1));
+        inventory.setStack(SLOT_NEXT, pageItem(hasNext ? Items.SPECTRAL_ARROW : Items.ARROW,
+                "下一页", hasNext, page + 2, page + 1));
+    }
+
+    /**
+     * 分页按钮物品。available 为 false 时灰色置灰（点击无效）。
+     * targetPage / totalPage 用于 lore 中的页码提示。
+     */
+    private ItemStack pageItem(Item item, String name, boolean available, int targetPage, int totalPage) {
+        ItemStack stack = new ItemStack(item);
+        stack.set(DataComponentTypes.CUSTOM_NAME, LeaderboardGuiItems.styled(name,
+                available ? LeaderboardGuiItems.COLOR_WHITE : LeaderboardGuiItems.COLOR_GRAY));
+        stack.set(DataComponentTypes.LORE, new LoreComponent(List.of(
+                LeaderboardGuiItems.styled(available
+                        ? "前往第 " + targetPage + " 页，共 " + pageCount() + " 页"
+                        : "当前第 " + totalPage + " 页，共 " + pageCount() + " 页",
+                        LeaderboardGuiItems.COLOR_GRAY))));
+        stack.set(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, available);
+        return stack;
     }
 
     private boolean isGroupView() {
         return view == View.GROUP_LIST || view == View.GROUP_DETAIL;
     }
 
+    /** 导航物品：选中加附魔光效，未选中显式去掉（下界之星等自带光效的物品也不例外） */
     private ItemStack navItem(ItemStack stack, String name, boolean active) {
         stack.set(DataComponentTypes.CUSTOM_NAME, LeaderboardGuiItems.styled(name,
                 active ? LeaderboardGuiItems.COLOR_GREEN : LeaderboardGuiItems.COLOR_WHITE));
-        if (active) {
-            stack.set(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, true);
-        }
+        stack.set(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, active);
         return stack;
     }
 
@@ -361,8 +384,7 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
 
     private ItemStack playerHead(String name) {
         ItemStack stack = new ItemStack(Items.PLAYER_HEAD);
-        stack.set(DataComponentTypes.PROFILE,
-                new ProfileComponent(Optional.of(name), Optional.empty(), new PropertyMap()));
+        stack.set(DataComponentTypes.PROFILE, PlayerHeads.profileFor(server, name));
         return stack;
     }
 
@@ -370,11 +392,11 @@ public class LeaderboardScreenHandler extends GenericContainerScreenHandler {
         ItemStack stack = playerHead(name);
         stack.set(DataComponentTypes.CUSTOM_NAME,
                 LeaderboardGuiItems.styled("#" + rank + " " + name, LeaderboardGuiItems.rankColor(rank)));
-        LeaderboardData.PlayerSummary ps = data.playerSummary.get(name);
+        LeaderboardData.PlayerSummary ps = data.getPlayerSummary().get(name);
         List<net.minecraft.text.Text> lore = new ArrayList<>();
         if (!compactLore) {
-            lore.add(LeaderboardGuiItems.styled("综合分：" + data.score.get(name), LeaderboardGuiItems.COLOR_GREEN));
-            lore.add(LeaderboardGuiItems.styled("冠军项数：" + data.titles.get(name), LeaderboardGuiItems.COLOR_GREEN));
+            lore.add(LeaderboardGuiItems.styled("综合分：" + data.getScore().get(name), LeaderboardGuiItems.COLOR_GREEN));
+            lore.add(LeaderboardGuiItems.styled("冠军项数：" + data.getTitles().get(name), LeaderboardGuiItems.COLOR_GREEN));
         }
         lore.add(LeaderboardGuiItems.styled("游戏时间："
                 + StatFormat.formatValue("minecraft:play_time", ps.playTime()), LeaderboardGuiItems.COLOR_GRAY));

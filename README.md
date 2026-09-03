@@ -5,12 +5,12 @@ Minecraft 1.21.7 Fabric 服务端模组：自动统计玩家数据并生成排�
 
 ## 功能
 
-- **自动生成排行榜**：服务器启动 30 秒后首次统计，之后每小时刷新一次，在服务器根目录输出 `leaderboard.html` 网页和 `leaderboard.json` 结构化数据
-- **游戏内可视化界面**：`/leaderboard` 弹出箱子 GUI，含 排行榜 / 通用 / 物品 / 生物 / 食物与饮品使用排行 五个分类，物品与生物名称支持中文翻译
-- **排除假人**：自动排除 `bot_` 前缀的 Carpet 假人，支持白名单/黑名单强制包含/排除
+- **自动生成排行榜**：服务器启动 30 秒后首次统计，之后每小时刷新一次，在服务器根目录输出 `leaderboard.html` 网页和 `leaderboard.json` 结构化数据；统计在后台线程异步执行，不阻塞游戏主线程
+- **游戏内可视化界面**：`/leaderboard` 弹出箱子 GUI，含 排行榜 / 通用 / 物品 / 生物 / 食物与饮品使用排行 五个分类，物品与生物名称支持中文翻译，玩家头颅显示真实皮肤
+- **排除假人**：自动排除 `bot_` 前缀的 Carpet 假人（前缀/后缀特征可用 `/leaderboard screen` 自定义），支持白名单/黑名单强制包含/排除；无法解析名字的孤儿 stats 文件自动跳过并提示清理
 - **四种显示模式**：精简 / 普通 / 全部 / 自定义（自定义模式通过 `custom_display.txt` 逐项控制）
-- **个人侧边计分板**：玩家可用 `/leaderboard scoreboard on` 开关显示自己的 9 项核心数据
-- **可调刷新间隔**：`/leaderboard refresh interval 30s` 支持 t/s/m/h 单位，0 关闭自动刷新
+- **个人侧边计分板**：玩家可用 `/leaderboard scoreboard on` 开关显示自己的 9 项核心数据，OP 可用 `/leaderboard allowscoreboard false` 全局禁止
+- **可调刷新间隔**：`/leaderboard refresh interval 30s` 支持 t/s/m/h 单位，0 关闭自动刷新；`/leaderboard refresh broadcast false` 可关闭刷新广播
 
 ## 指令
 
@@ -19,10 +19,15 @@ Minecraft 1.21.7 Fabric 服务端模组：自动统计玩家数据并生成排�
 | `/leaderboard` | 所有人 | 打开排行榜 GUI（控制台执行则输出文字版） |
 | `/leaderboard refresh` | OP | 立即重新生成 |
 | `/leaderboard refresh interval <数字>[t\|s\|m\|h]` | OP | 设置自动刷新间隔，0 为关闭 |
+| `/leaderboard refresh broadcast true\|false` | OP | 是否广播自动刷新的聊天提示 |
 | `/leaderboard mode <compact\|normal\|full\|custom>` | OP | 切换显示模式 |
 | `/leaderboard player list` / `list all` | OP | 查看排行榜包含的玩家 / 全部玩家 |
-| `/leaderboard player add <玩家>` | OP | 加入白名单（强制包含） |
-| `/leaderboard player remove <玩家>` | OP | 加入黑名单（强制排除） |
+| `/leaderboard player whitelist add\|remove <玩家>` | OP | 管理白名单（强制包含；加入时自动移出黑名单） |
+| `/leaderboard player blacklist add\|remove <玩家>` | OP | 管理黑名单（强制排除；加入时自动移出白名单） |
+| `/leaderboard screen prefix\|suffix <特征>` | OP | 添加名称筛除前缀/后缀（默认前缀 bot_，可多次添加） |
+| `/leaderboard screen remove <特征>` | OP | 移除名称筛除特征 |
+| `/leaderboard screen list` | OP | 查看当前名称筛除特征 |
+| `/leaderboard allowscoreboard true\|false` | OP | 是否允许普通玩家开启侧边计分板 |
 | `/leaderboard scoreboard on\|off` | 所有人 | 开关个人侧边计分板 |
 | `/leaderboard help` | 所有人 | 显示指令帮助（OP 追加显示管理指令） |
 
@@ -32,10 +37,11 @@ Minecraft 1.21.7 Fabric 服务端模组：自动统计玩家数据并生成排�
 
 ```
 leaderboard/
-├── config.json          # 显示模式与自动刷新间隔
+├── config.json          # 显示模式、刷新间隔、广播与计分板开关、筛除特征
 ├── whitelist.json       # 白名单玩家名数组
 ├── blacklist.json       # 黑名单玩家名数组
 ├── scoreboard.json      # 开启侧边计分板的玩家
+├── stat_names.json      # 通用分类统计项中文名（可改，改动自动热重载）
 ├── custom_display.txt   # 自定义模式逐项开关（stat_id true/false）
 └── lang/zh_cn.json      # 中文翻译表（需自行放置，见下）
 ```
@@ -58,8 +64,8 @@ leaderboard/
 gradlew build
 ```
 
-产物在 `build/libs/server-leaderboard-1.1.0.jar`，放入服务端 `mods/` 即可。
-依赖：Fabric Loader >= 0.19.3、Fabric API（0.129.0+1.21.7）、Minecraft 1.21.7。
+产物在 `build/libs/server-leaderboard-1.2.0+mc1.21.7.jar`，放入服务端 `mods/` 即可。
+依赖：Fabric Loader >= 0.19.3、Fabric API >= 0.129.0、Minecraft 1.21.7。
 
 ## 许可
 

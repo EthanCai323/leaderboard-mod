@@ -5,9 +5,9 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.mojang.authlib.GameProfile;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.WorldSavePath;
 
 import java.io.IOException;
@@ -19,24 +19,42 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
- * 定时执行的核心：读取 world/stats/*.json，排除 bot_ 假人，
+ * 定时执行的核心：读取 world/stats/*.json，按名单与名称特征筛除玩家，
  * 计算排行榜并输出 leaderboard.html / leaderboard.json。
+ * 文件读取、JSON 解析与排名计算在后台线程执行，
+ * 结果写盘与广播通过 server.execute 切回主线程；AtomicBoolean 防止并发重入。
+ * 无法解析出名字的 UUID 直接跳过，不参与排名。
  */
 public final class LeaderboardGenerator {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final DateTimeFormatter TS_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "server-leaderboard-generator");
+        t.setDaemon(true);
+        return t;
+    });
+    private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
+
     private static volatile LeaderboardData lastData;
     private static volatile String lastUpdated;
     private static volatile Map<String, Boolean> lastAllPlayers = Map.of();
+    /** 本会话已提醒过的孤儿 stats 文件（避免每次生成重复提醒） */
+    private static final Set<String> reportedOrphans = ConcurrentHashMap.newKeySet();
 
     private LeaderboardGenerator() {
     }
@@ -54,89 +72,173 @@ public final class LeaderboardGenerator {
         return lastAllPlayers;
     }
 
-    public static synchronized boolean generate(MinecraftServer server) {
+    /** 是否正在后台生成 */
+    public static boolean isRunning() {
+        return RUNNING.get();
+    }
+
+    /**
+     * 请求一次异步生成。已在生成中时返回 false（不排队）。
+     * onDone 在主线程回调，参数表示本次是否成功产出新数据。
+     * 注意：必须在服务器主线程调用。
+     */
+    public static boolean requestGenerate(MinecraftServer server, Consumer<Boolean> onDone) {
+        if (!RUNNING.compareAndSet(false, true)) {
+            return false;
+        }
+        // 主线程热加载配置、名单与各名称表
+        LeaderboardConfig.load();
+        PlayerFilter.load();
+        StatFormat.loadStatNamesIfChanged();
+        Lang.reloadIfChanged();
+
+        Path statsDir = server.getSavePath(WorldSavePath.ROOT).resolve("stats");
+        // 主线程快照在线玩家：UUID -> 名字，以及 Carpet 假人 UUID
+        Map<String, String> onlineNames = new HashMap<>();
+        Set<String> fakeUuids = new HashSet<>();
+        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+            String id = player.getUuid().toString().toLowerCase(Locale.ROOT);
+            onlineNames.put(id, player.getGameProfile().getName());
+            if (PlayerFilter.isCarpetFakePlayer(player)) {
+                fakeUuids.add(id);
+            }
+        }
+
+        EXECUTOR.submit(() -> {
+            OffThreadResult result;
+            try {
+                result = computeOffThread(statsDir, onlineNames, fakeUuids);
+            } catch (Exception e) {
+                ServerLeaderboardMod.LOGGER.error("[排行榜] 生成失败", e);
+                result = null;
+            }
+            OffThreadResult finalResult = result;
+            server.execute(() -> {
+                boolean ok;
+                try {
+                    ok = finishOnMainThread(finalResult);
+                } finally {
+                    RUNNING.set(false);
+                }
+                if (onDone != null) {
+                    onDone.accept(ok);
+                }
+            });
+        });
+        return true;
+    }
+
+    /** 后台线程结果：data 为 null 表示没有可统计玩家或失败 */
+    private record OffThreadResult(LeaderboardData data, Map<String, Boolean> allPlayers,
+                                   List<String> orphanUuids, String updated) {
+    }
+
+    /** 后台线程：读文件、解析、过滤、计算 */
+    private static OffThreadResult computeOffThread(Path statsDir, Map<String, String> onlineNames,
+                                                    Set<String> fakeUuids) throws IOException {
+        if (!Files.isDirectory(statsDir)) {
+            ServerLeaderboardMod.LOGGER.warn("[排行榜] 找不到统计目录: {}", statsDir);
+            return null;
+        }
+
+        // --- 读取全部玩家统计文件 ---
+        Map<String, Map<String, Map<String, Long>>> raw = new LinkedHashMap<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(statsDir, "*.json")) {
+            for (Path p : stream) {
+                String fname = p.getFileName().toString();
+                String uuid = fname.substring(0, fname.length() - ".json".length());
+                try {
+                    JsonObject root = JsonParser.parseString(Files.readString(p)).getAsJsonObject();
+                    JsonObject stats = root.has("stats") && root.get("stats").isJsonObject()
+                            ? root.getAsJsonObject("stats") : new JsonObject();
+                    raw.put(uuid.toLowerCase(Locale.ROOT), parseStats(stats));
+                } catch (Exception e) {
+                    ServerLeaderboardMod.LOGGER.warn("[排行榜] 读取统计文件失败: {} ({})", fname, e.toString());
+                }
+            }
+        }
+
+        // --- 解析 UUID -> 名字，按名单/名称特征/假人类名过滤 ---
+        Map<String, String> fileNames = loadUserCacheFile();
+        Map<String, Map<String, Map<String, Long>>> allStats = new LinkedHashMap<>();
+        Map<String, Boolean> allPlayers = new LinkedHashMap<>();
+        List<String> excluded = new ArrayList<>();
+        List<String> orphans = new ArrayList<>();
+        for (Map.Entry<String, Map<String, Map<String, Long>>> e : raw.entrySet()) {
+            String uuidStr = e.getKey();
+            String name = resolveName(uuidStr, onlineNames, fileNames);
+            if (name == null) {
+                // 解析不出名字的玩家直接跳过，不参与排名
+                orphans.add(uuidStr);
+                continue;
+            }
+            boolean whitelisted = PlayerFilter.isWhitelisted(name);
+            boolean included = PlayerFilter.isIncluded(name)
+                    && (whitelisted || !fakeUuids.contains(uuidStr));
+            allPlayers.put(name, included);
+            if (!included) {
+                excluded.add(name);
+                continue;
+            }
+            allStats.put(name, e.getValue());
+        }
+        if (!excluded.isEmpty()) {
+            ServerLeaderboardMod.LOGGER.info("[排行榜] 已排除 {} 个玩家: {}", excluded.size(), String.join(", ", excluded));
+        }
+        if (allStats.isEmpty()) {
+            return new OffThreadResult(null, allPlayers, orphans, null);
+        }
+
+        LeaderboardData data = LeaderboardCompute.compute(allStats);
+        String updated = OffsetDateTime.now(ZoneOffset.ofHours(8)).format(TS_FORMAT);
+        return new OffThreadResult(data, allPlayers, orphans, updated);
+    }
+
+    /** 主线程：落地结果、写文件、记录日志 */
+    private static boolean finishOnMainThread(OffThreadResult result) {
+        if (result == null) {
+            return false;
+        }
+        lastAllPlayers = result.allPlayers();
+        reportOrphans(result.orphanUuids());
+        LeaderboardData data = result.data();
+        if (data == null) {
+            ServerLeaderboardMod.LOGGER.info("[排行榜] 没有可统计的玩家，跳过本次生成");
+            return false;
+        }
+        lastData = data;
+        lastUpdated = result.updated();
         try {
-            // 热加载配置、名单与翻译表
-            LeaderboardConfig.load();
-            PlayerFilter.load();
-            Lang.reload();
-
-            Path statsDir = server.getSavePath(WorldSavePath.ROOT).resolve("stats");
-            if (!Files.isDirectory(statsDir)) {
-                ServerLeaderboardMod.LOGGER.warn("[排行榜] 找不到统计目录: {}", statsDir);
-                return false;
-            }
-
-            // --- 读取全部玩家统计文件 ---
-            Map<String, Map<String, Map<String, Long>>> raw = new LinkedHashMap<>();
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(statsDir, "*.json")) {
-                for (Path p : stream) {
-                    String fname = p.getFileName().toString();
-                    String uuid = fname.substring(0, fname.length() - ".json".length());
-                    try {
-                        JsonObject root = JsonParser.parseString(Files.readString(p)).getAsJsonObject();
-                        JsonObject stats = root.has("stats") && root.get("stats").isJsonObject()
-                                ? root.getAsJsonObject("stats") : new JsonObject();
-                        raw.put(uuid.toLowerCase(Locale.ROOT), parseStats(stats));
-                    } catch (Exception e) {
-                        ServerLeaderboardMod.LOGGER.warn("[排行榜] 读取统计文件失败: {} ({})", fname, e.toString());
-                    }
-                }
-            }
-
-            // --- 解析 UUID -> 名字，按白名单/黑名单/bot_ 前缀过滤 ---
-            Map<String, String> fileNames = loadUserCacheFile();
-            Map<String, Map<String, Map<String, Long>>> allStats = new LinkedHashMap<>();
-            Map<String, Boolean> allPlayers = new LinkedHashMap<>();
-            List<String> excluded = new ArrayList<>();
-            int unknown = 0;
-            for (Map.Entry<String, Map<String, Map<String, Long>>> e : raw.entrySet()) {
-                String uuidStr = e.getKey();
-                String name = resolveName(server, uuidStr, fileNames);
-                if (name == null) {
-                    name = "未知玩家-" + uuidStr.substring(0, Math.min(8, uuidStr.length()));
-                    unknown++;
-                }
-                boolean included = PlayerFilter.isIncluded(name);
-                allPlayers.put(name, included);
-                if (!included) {
-                    excluded.add(name);
-                    continue;
-                }
-                allStats.put(name, e.getValue());
-            }
-            lastAllPlayers = allPlayers;
-            if (!excluded.isEmpty()) {
-                ServerLeaderboardMod.LOGGER.info("[排行榜] 已排除 {} 个玩家: {}", excluded.size(), String.join(", ", excluded));
-            }
-            if (unknown > 0) {
-                ServerLeaderboardMod.LOGGER.info("[排行榜] 有 {} 个 UUID 未找到名字", unknown);
-            }
-            if (allStats.isEmpty()) {
-                ServerLeaderboardMod.LOGGER.info("[排行榜] 没有可统计的玩家，跳过本次生成");
-                return false;
-            }
-
-            // --- 计算 ---
-            LeaderboardData data = LeaderboardCompute.compute(allStats);
-            lastData = data;
-            String updated = OffsetDateTime.now(ZoneOffset.ofHours(8)).format(TS_FORMAT);
-            lastUpdated = updated;
-
             // --- 输出到服务器运行目录 ---
             Path gameDir = FabricLoader.getInstance().getGameDir();
             Path htmlPath = gameDir.resolve("leaderboard.html");
             Path jsonPath = gameDir.resolve("leaderboard.json");
-            Files.writeString(htmlPath, HtmlReport.buildHtml(data, updated), StandardCharsets.UTF_8);
-            Files.writeString(jsonPath, buildJson(data, updated), StandardCharsets.UTF_8);
+            Files.writeString(htmlPath, HtmlReport.buildHtml(data, result.updated()), StandardCharsets.UTF_8);
+            Files.writeString(jsonPath, buildJson(data, result.updated()), StandardCharsets.UTF_8);
 
-            String top = data.overall.get(0);
+            String top = data.getOverall().get(0);
             ServerLeaderboardMod.LOGGER.info("[排行榜] 已更新：{} 名玩家，综合第一 {}（{} 分）-> {}",
-                    data.overall.size(), top, data.score.get(top), htmlPath);
+                    data.getOverall().size(), top, data.getScore().get(top), htmlPath);
             return true;
         } catch (Exception e) {
-            ServerLeaderboardMod.LOGGER.error("[排行榜] 生成失败", e);
+            ServerLeaderboardMod.LOGGER.error("[排行榜] 写入输出文件失败", e);
             return false;
+        }
+    }
+
+    /** 孤儿 stats 文件提醒：每个 UUID 本会话只提醒一次 */
+    private static void reportOrphans(List<String> orphans) {
+        List<String> fresh = new ArrayList<>();
+        for (String uuid : orphans) {
+            if (reportedOrphans.add(uuid)) {
+                fresh.add(uuid);
+            }
+        }
+        if (!fresh.isEmpty()) {
+            ServerLeaderboardMod.LOGGER.warn(
+                    "[排行榜] {} 个 stats 文件无法解析出玩家名，已跳过排名；若为遗留数据，"
+                            + "服主可手动删除 world/stats 下对应文件: {}",
+                    fresh.size(), String.join(", ", fresh));
         }
     }
 
@@ -161,19 +263,12 @@ public final class LeaderboardGenerator {
         return out;
     }
 
-    /** 名字解析：优先服务器 UserCache，其次 usercache.json 文件 */
-    private static String resolveName(MinecraftServer server, String uuidStr, Map<String, String> fileNames) {
-        try {
-            UUID uuid = UUID.fromString(uuidStr);
-            var cache = server.getUserCache();
-            if (cache != null) {
-                Optional<GameProfile> profile = cache.getByUuid(uuid);
-                if (profile.isPresent() && profile.get().getName() != null) {
-                    return profile.get().getName();
-                }
-            }
-        } catch (Exception ignored) {
-            // UUID 解析失败或缓存查询失败，走文件兜底
+    /** 名字解析：优先在线玩家快照，其次 usercache.json 文件（均为主线程快照/本地文件，无网络请求） */
+    private static String resolveName(String uuidStr, Map<String, String> onlineNames,
+                                      Map<String, String> fileNames) {
+        String name = onlineNames.get(uuidStr.toLowerCase(Locale.ROOT));
+        if (name != null) {
+            return name;
         }
         return fileNames.get(uuidStr.toLowerCase(Locale.ROOT));
     }
@@ -204,23 +299,23 @@ public final class LeaderboardGenerator {
     private static String buildJson(LeaderboardData data, String updated) {
         JsonObject root = new JsonObject();
         root.addProperty("updated", updated);
-        root.addProperty("player_count", data.overall.size());
+        root.addProperty("player_count", data.getOverall().size());
 
         JsonArray overall = new JsonArray();
         int rank = 0;
-        for (String name : data.overall) {
+        for (String name : data.getOverall()) {
             rank++;
             JsonObject o = new JsonObject();
             o.addProperty("rank", rank);
             o.addProperty("name", name);
-            o.addProperty("score", data.score.get(name));
-            o.addProperty("titles", data.titles.get(name));
+            o.addProperty("score", data.getScore().get(name));
+            o.addProperty("titles", data.getTitles().get(name));
             overall.add(o);
         }
         root.add("overall", overall);
 
         JsonArray kings = new JsonArray();
-        for (LeaderboardData.CustomLeader leader : data.leadersCustom) {
+        for (LeaderboardData.CustomLeader leader : data.getLeadersCustom()) {
             LeaderboardData.Entry top = leader.ranking().get(0);
             JsonObject o = new JsonObject();
             o.addProperty("stat", leader.stat());
@@ -233,7 +328,7 @@ public final class LeaderboardGenerator {
         root.add("kings", kings);
 
         JsonObject cats = new JsonObject();
-        for (Map.Entry<String, List<LeaderboardData.ItemRow>> e : data.leadersItems.entrySet()) {
+        for (Map.Entry<String, List<LeaderboardData.ItemRow>> e : data.getLeadersItems().entrySet()) {
             JsonArray rows = new JsonArray();
             List<LeaderboardData.ItemRow> catRows = e.getValue();
             int limit = Math.min(StatFormat.TOP_ITEMS_PER_CATEGORY, catRows.size());
@@ -252,8 +347,8 @@ public final class LeaderboardGenerator {
         root.add("item_categories", cats);
 
         JsonArray players = new JsonArray();
-        for (String name : data.overall) {
-            LeaderboardData.PlayerSummary ps = data.playerSummary.get(name);
+        for (String name : data.getOverall()) {
+            LeaderboardData.PlayerSummary ps = data.getPlayerSummary().get(name);
             JsonObject o = new JsonObject();
             o.addProperty("name", name);
             o.addProperty("play_time", ps.playTime());

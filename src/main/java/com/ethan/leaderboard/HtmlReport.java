@@ -81,13 +81,13 @@ public final class HtmlReport {
         // --- 综合排行榜 ---
         StringBuilder rows = new StringBuilder();
         int i = 0;
-        for (String name : data.overall) {
+        for (String name : data.getOverall()) {
             i++;
-            LeaderboardData.PlayerSummary ps = data.playerSummary.get(name);
+            LeaderboardData.PlayerSummary ps = data.getPlayerSummary().get(name);
             rows.append("<tr><td class=\"rank r").append(i).append("\">").append(i).append("</td>")
                     .append("<td><b>").append(StatFormat.esc(name)).append("</b></td>")
-                    .append("<td><b>").append(data.score.get(name)).append("</b></td>")
-                    .append("<td>").append(data.titles.get(name)).append("</td>")
+                    .append("<td><b>").append(data.getScore().get(name)).append("</b></td>")
+                    .append("<td>").append(data.getTitles().get(name)).append("</td>")
                     .append("<td>").append(StatFormat.formatValue("minecraft:play_time", ps.playTime())).append("</td>")
                     .append("<td>").append(ps.deaths()).append("</td>")
                     .append("<td>").append(StatFormat.num(ps.mobKills())).append("</td>")
@@ -99,7 +99,7 @@ public final class HtmlReport {
 
         // --- 数据之王 ---
         StringBuilder krows = new StringBuilder();
-        for (LeaderboardData.CustomLeader leader : data.leadersCustom) {
+        for (LeaderboardData.CustomLeader leader : data.getLeadersCustom()) {
             String stat = leader.stat();
             List<LeaderboardData.Entry> ranking = leader.ranking();
             LeaderboardData.Entry king = ranking.get(0);
@@ -116,7 +116,7 @@ public final class HtmlReport {
 
         // --- 物品分类榜 ---
         StringBuilder sections = new StringBuilder();
-        for (Map.Entry<String, List<LeaderboardData.ItemRow>> catEntry : data.leadersItems.entrySet()) {
+        for (Map.Entry<String, List<LeaderboardData.ItemRow>> catEntry : data.getLeadersItems().entrySet()) {
             String cat = catEntry.getKey();
             List<LeaderboardData.ItemRow> rowsCat = catEntry.getValue();
             if (rowsCat.isEmpty()) {
@@ -145,8 +145,8 @@ public final class HtmlReport {
 
         // --- 玩家数据总览 ---
         StringBuilder srows = new StringBuilder();
-        for (String name : data.overall) {
-            LeaderboardData.PlayerSummary ps = data.playerSummary.get(name);
+        for (String name : data.getOverall()) {
+            LeaderboardData.PlayerSummary ps = data.getPlayerSummary().get(name);
             srows.append("<tr><td><b>").append(StatFormat.esc(name)).append("</b></td>")
                     .append("<td>").append(StatFormat.formatValue("minecraft:play_time", ps.playTime())).append("</td>")
                     .append("<td>").append(ps.deaths()).append("</td>")
@@ -163,7 +163,7 @@ public final class HtmlReport {
 
         return HTML_TEMPLATE
                 .replace("__UPDATED__", updated)
-                .replace("__PCOUNT__", String.valueOf(data.overall.size()))
+                .replace("__PCOUNT__", String.valueOf(data.getOverall().size()))
                 .replace("__OVERALL_TABLE__", overallTable)
                 .replace("__LEADER_TABLE__", leaderTable)
                 .replace("__ITEM_TABLES__", itemTables)
