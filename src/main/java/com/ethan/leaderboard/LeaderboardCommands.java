@@ -37,6 +37,7 @@ import static net.minecraft.server.command.CommandManager.literal;
  * /leaderboard screen remove prefix/suffix <> 按类型移除名称筛除特征（仅 OP）
  * /leaderboard screen list                    查看名称筛除特征（仅 OP）
  * /leaderboard allowscoreboard [true/false]   查看或设置普通玩家计分板权限（仅 OP）
+ * /leaderboard scoreboard refresh interval [] 计分板主动刷新间隔（仅 OP，0 跟随数据更新）
  * /leaderboard history [数量]                 查看或设置历史快照保留数量（仅 OP，0 关闭）
  * /leaderboard reload                         重新加载全部配置并后台重新生成（仅 OP）
  * /leaderboard scoreboard on|off              个人侧边计分板（任何玩家）
@@ -153,7 +154,14 @@ public final class LeaderboardCommands {
                                 .then(literal("on")
                                         .executes(ctx -> scoreboard(ctx.getSource(), true)))
                                 .then(literal("off")
-                                        .executes(ctx -> scoreboard(ctx.getSource(), false))))));
+                                        .executes(ctx -> scoreboard(ctx.getSource(), false)))
+                                .then(literal("refresh")
+                                        .requires(LeaderboardCommands::isOp)
+                                        .then(literal("interval")
+                                                .executes(ctx -> showScoreboardInterval(ctx.getSource()))
+                                                .then(argument("value", StringArgumentType.word())
+                                                        .executes(ctx -> setScoreboardInterval(ctx.getSource(),
+                                                                StringArgumentType.getString(ctx, "value")))))))));
     }
 
     /** 重新加载全部配置文件并触发一次后台重新生成 */
@@ -164,6 +172,7 @@ public final class LeaderboardCommands {
         CustomDisplay.loadIfChanged();
         Lang.reloadIfChanged();
         SidebarScoreboards.load();
+        SidebarScoreboards.reconcile(src.getServer());
         LeaderboardGenerator.requestGenerate(src.getServer(), null);
         src.sendMessage(Text.literal("配置已重新加载").formatted(Formatting.GREEN));
         return 1;
@@ -260,21 +269,12 @@ public final class LeaderboardCommands {
     }
 
     private static int setInterval(ServerCommandSource src, String arg) {
-        Matcher matcher = INTERVAL_PATTERN.matcher(arg);
-        if (!matcher.matches()) {
+        long ticks = parseTicks(arg);
+        if (ticks < 0) {
             src.sendMessage(Text.literal("用法：/leaderboard refresh interval <数字>[t|s|m|h]")
                     .formatted(Formatting.RED));
             return 0;
         }
-        long value = Long.parseLong(matcher.group(1));
-        String unit = matcher.group(2) == null ? "s" : matcher.group(2);
-        long multiplier = switch (unit) {
-            case "t" -> 1L;
-            case "m" -> 1200L;
-            case "h" -> 72000L;
-            default -> 20L;
-        };
-        long ticks = value * multiplier;
         LeaderboardConfig.get().refreshIntervalTicks = ticks;
         LeaderboardConfig.save();
         ServerLeaderboardMod.resetSchedule();
@@ -285,6 +285,23 @@ public final class LeaderboardCommands {
                     .formatted(Formatting.GREEN));
         }
         return 1;
+    }
+
+    /** 解析 <数字>[t|s|m|h] 为 tick 数，无单位按秒；格式非法返回 -1 */
+    private static long parseTicks(String arg) {
+        Matcher matcher = INTERVAL_PATTERN.matcher(arg);
+        if (!matcher.matches()) {
+            return -1;
+        }
+        long value = Long.parseLong(matcher.group(1));
+        String unit = matcher.group(2) == null ? "s" : matcher.group(2);
+        long multiplier = switch (unit) {
+            case "t" -> 1L;
+            case "m" -> 1200L;
+            case "h" -> 72000L;
+            default -> 20L;
+        };
+        return value * multiplier;
     }
 
     /** tick 转自然单位：整小时显示小时，整分钟显示分钟，整秒显示秒，其余显示 tick */
@@ -554,6 +571,36 @@ public final class LeaderboardCommands {
 
     // ---------- scoreboard ----------
 
+    /** 无参数：显示当前计分板刷新间隔 */
+    private static int showScoreboardInterval(ServerCommandSource src) {
+        long ticks = LeaderboardConfig.get().scoreboardRefreshIntervalTicks;
+        if (ticks <= 0) {
+            src.sendMessage(Text.literal("当前计分板跟随排行榜数据更新").formatted(Formatting.GRAY));
+        } else {
+            src.sendMessage(Text.literal("当前计分板刷新间隔：" + formatInterval(ticks))
+                    .formatted(Formatting.GRAY));
+        }
+        return 1;
+    }
+
+    private static int setScoreboardInterval(ServerCommandSource src, String arg) {
+        long ticks = parseTicks(arg);
+        if (ticks < 0) {
+            src.sendMessage(Text.literal("用法：/leaderboard scoreboard refresh interval <数字>[t|s|m|h]")
+                    .formatted(Formatting.RED));
+            return 0;
+        }
+        LeaderboardConfig.get().scoreboardRefreshIntervalTicks = ticks;
+        LeaderboardConfig.save();
+        if (ticks == 0) {
+            src.sendMessage(Text.literal("计分板已改为跟随排行榜数据更新").formatted(Formatting.GREEN));
+        } else {
+            src.sendMessage(Text.literal("计分板刷新间隔已设置为 " + formatInterval(ticks))
+                    .formatted(Formatting.GREEN));
+        }
+        return 1;
+    }
+
     private static int scoreboard(ServerCommandSource src, boolean on) {
         if (!(src.getEntity() instanceof ServerPlayerEntity player)) {
             src.sendMessage(Text.literal("仅玩家可用此指令").formatted(Formatting.RED));
@@ -582,11 +629,11 @@ public final class LeaderboardCommands {
             src.sendMessage(Text.literal("以下仅 OP 可用：").formatted(Formatting.GOLD));
             src.sendMessage(Text.literal("/leaderboard refresh - 手动刷新排行榜")
                     .formatted(Formatting.GRAY));
-            src.sendMessage(Text.literal("/leaderboard refresh interval [数字[t|s|m|h]] - 查看或设置自动刷新间隔")
+            src.sendMessage(Text.literal("/leaderboard refresh interval [数字[t|s|m|h]] - 设置自动刷新间隔，设为 0 时关闭")
                     .formatted(Formatting.GRAY));
-            src.sendMessage(Text.literal("/leaderboard refresh broadcast [true|false] - 查看或设置自动刷新广播")
+            src.sendMessage(Text.literal("/leaderboard refresh broadcast [true|false] - 设置自动刷新广播")
                     .formatted(Formatting.GRAY));
-            src.sendMessage(Text.literal("/leaderboard mode [compact|normal|full|custom] - 查看或切换显示模式")
+            src.sendMessage(Text.literal("/leaderboard mode [compact|normal|full|custom] - 切换显示模式")
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard player list [all] - 查看玩家名单")
                     .formatted(Formatting.GRAY));
@@ -600,11 +647,13 @@ public final class LeaderboardCommands {
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard screen list - 查看名称筛除特征")
                     .formatted(Formatting.GRAY));
-            src.sendMessage(Text.literal("/leaderboard allowscoreboard [true|false] - 查看或设置普通玩家计分板权限")
+            src.sendMessage(Text.literal("/leaderboard allowscoreboard [true|false] - 设置普通玩家计分板权限")
                     .formatted(Formatting.GRAY));
-            src.sendMessage(Text.literal("/leaderboard history [数量] - 查看或设置历史快照保留数量，0 为关闭")
+            src.sendMessage(Text.literal("/leaderboard scoreboard refresh interval [数字[t|s|m|h]] - 设置计分板刷新间隔，设为 0 时跟随数据更新")
                     .formatted(Formatting.GRAY));
-            src.sendMessage(Text.literal("/leaderboard reload - 重新加载配置并重新生成排行榜")
+            src.sendMessage(Text.literal("/leaderboard history [数量] - 设置历史快照保留数量，设为 0 时关闭")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard reload - 重新加载配置并生成排行榜")
                     .formatted(Formatting.GRAY));
         }
         return 1;

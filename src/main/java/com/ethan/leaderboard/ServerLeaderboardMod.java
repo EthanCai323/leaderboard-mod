@@ -31,6 +31,7 @@ public class ServerLeaderboardMod implements DedicatedServerModInitializer {
             LeaderboardConfig.load();
             PlayerFilter.load();
             SidebarScoreboards.load();
+            SidebarScoreboards.startWatcher(server);
             CustomDisplay.loadIfChanged();
             Lang.reloadIfChanged();
             StatFormat.loadStatNamesIfChanged();
@@ -63,8 +64,11 @@ public class ServerLeaderboardMod implements DedicatedServerModInitializer {
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
                 SidebarScoreboards.onDisconnect(handler.player));
 
-        // 服务器停止时优雅关闭后台生成线程，避免输出文件写一半
-        ServerLifecycleEvents.SERVER_STOPPING.register(server -> LeaderboardGenerator.shutdown());
+        // 服务器停止时优雅关闭后台线程，避免输出文件写一半
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            LeaderboardGenerator.shutdown();
+            SidebarScoreboards.shutdown();
+        });
 
         LeaderboardCommands.register();
     }

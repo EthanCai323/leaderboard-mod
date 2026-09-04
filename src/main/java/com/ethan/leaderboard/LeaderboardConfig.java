@@ -22,7 +22,7 @@ public class LeaderboardConfig {
     public static final long DEFAULT_INTERVAL_TICKS = 72000L;
 
     /** 当前配置文件版本，加载旧版本文件时按需迁移 */
-    public static final int CURRENT_VERSION = 3;
+    public static final int CURRENT_VERSION = 4;
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static LeaderboardConfig instance = new LeaderboardConfig();
@@ -36,6 +36,8 @@ public class LeaderboardConfig {
     public boolean allowScoreboard = true;
     /** 历史快照保留数量，0 表示关闭归档 */
     public int historyKeep = 30;
+    /** 计分板主动刷新间隔（tick），0 表示跟随排行榜数据更新 */
+    public long scoreboardRefreshIntervalTicks = 0L;
     /** 筛除玩家的名称前缀（默认排除 bot_ 假人） */
     public List<String> screenPrefixes = new ArrayList<>(List.of(StatFormat.BOT_PREFIX));
     /** 筛除玩家的名称后缀 */
@@ -85,6 +87,10 @@ public class LeaderboardConfig {
         }
         if (historyKeep < 0) {
             historyKeep = 0;
+        }
+        // 缺失的 long 字段反序列化为 0，即"跟随排行榜数据更新"，正好是默认值
+        if (scoreboardRefreshIntervalTicks < 0) {
+            scoreboardRefreshIntervalTicks = 0;
         }
         if (version < CURRENT_VERSION) {
             ServerLeaderboardMod.LOGGER.info("[排行榜] config.json 由版本 {} 迁移至 {}", version, CURRENT_VERSION);
