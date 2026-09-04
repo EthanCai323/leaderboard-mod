@@ -22,7 +22,7 @@ public class LeaderboardConfig {
     public static final long DEFAULT_INTERVAL_TICKS = 72000L;
 
     /** 当前配置文件版本，加载旧版本文件时按需迁移 */
-    public static final int CURRENT_VERSION = 2;
+    public static final int CURRENT_VERSION = 3;
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static LeaderboardConfig instance = new LeaderboardConfig();
@@ -34,6 +34,8 @@ public class LeaderboardConfig {
     public boolean broadcastRefresh = true;
     /** 是否允许普通玩家开启个人侧边计分板（OP 不受限制） */
     public boolean allowScoreboard = true;
+    /** 历史快照保留数量，0 表示关闭归档 */
+    public int historyKeep = 30;
     /** 筛除玩家的名称前缀（默认排除 bot_ 假人） */
     public List<String> screenPrefixes = new ArrayList<>(List.of(StatFormat.BOT_PREFIX));
     /** 筛除玩家的名称后缀 */
@@ -76,6 +78,13 @@ public class LeaderboardConfig {
         }
         if (screenSuffixes == null) {
             screenSuffixes = new ArrayList<>();
+        }
+        // v2 之前的配置没有 historyKeep，Gson 会反序列化为 0（关闭），补回默认值
+        if (version < 3) {
+            historyKeep = 30;
+        }
+        if (historyKeep < 0) {
+            historyKeep = 0;
         }
         if (version < CURRENT_VERSION) {
             ServerLeaderboardMod.LOGGER.info("[排行榜] config.json 由版本 {} 迁移至 {}", version, CURRENT_VERSION);

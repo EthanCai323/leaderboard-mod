@@ -19,6 +19,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -188,6 +189,7 @@ public final class LeaderboardGenerator {
         // --- 解析 UUID -> 名字，按名单/名称特征/假人类名过滤 ---
         Map<String, String> fileNames = loadUserCacheFile();
         Map<String, Map<String, Map<String, Long>>> allStats = new LinkedHashMap<>();
+        Map<String, String> nameToUuid = new LinkedHashMap<>();
         Map<String, Boolean> allPlayers = new LinkedHashMap<>();
         List<String> excluded = new ArrayList<>();
         List<String> orphans = new ArrayList<>();
@@ -208,6 +210,7 @@ public final class LeaderboardGenerator {
                 continue;
             }
             allStats.put(name, e.getValue());
+            nameToUuid.put(name, uuidStr);
         }
         if (!excluded.isEmpty()) {
             ServerLeaderboardMod.LOGGER.info("[排行榜] 已排除 {} 个玩家: {}", excluded.size(), String.join(", ", excluded));
@@ -216,7 +219,7 @@ public final class LeaderboardGenerator {
             return new OffThreadResult(null, allPlayers, orphans, null);
         }
 
-        LeaderboardData data = LeaderboardCompute.compute(allStats);
+        LeaderboardData data = LeaderboardCompute.compute(allStats, nameToUuid);
         String updated = OffsetDateTime.now(ZoneOffset.ofHours(8)).format(TS_FORMAT);
         return new OffThreadResult(data, allPlayers, orphans, updated);
     }
@@ -252,8 +255,14 @@ public final class LeaderboardGenerator {
             Path gameDir = FabricLoader.getInstance().getGameDir();
             Path htmlPath = gameDir.resolve("leaderboard.html");
             Path jsonPath = gameDir.resolve("leaderboard.json");
+            String json = buildJson(data, result.updated());
             Files.writeString(htmlPath, HtmlReport.buildHtml(data, result.updated()), StandardCharsets.UTF_8);
-            Files.writeString(jsonPath, buildJson(data, result.updated()), StandardCharsets.UTF_8);
+            Files.writeString(jsonPath, json, StandardCharsets.UTF_8);
+            // 历史快照归档：交回后台线程执行，失败只记日志不影响主流程
+            if (LeaderboardConfig.get().historyKeep > 0) {
+                String updated = result.updated();
+                EXECUTOR.submit(() -> archiveSnapshot(gameDir, json, updated));
+            }
 
             String top = data.getOverall().get(0);
             ServerLeaderboardMod.LOGGER.info("[排行榜] 已更新：{} 名玩家，综合第一 {}（{} 分）-> {}",
@@ -263,6 +272,60 @@ public final class LeaderboardGenerator {
             ServerLeaderboardMod.LOGGER.error("[排行榜] 写入输出文件失败", e);
             return false;
         }
+    }
+
+    /**
+     * 后台线程：把本次 leaderboard.json 归档到 leaderboard/history/yyyy-MM-dd_HH-mm-ss.json，
+     * 然后清理超出保留数量的最旧快照。任何失败只记日志，不影响生成主流程。
+     */
+    private static void archiveSnapshot(Path gameDir, String json, String updated) {
+        try {
+            Path dir = gameDir.resolve("leaderboard").resolve("history");
+            Files.createDirectories(dir);
+            String ts = updated.replace(':', '-').replace(' ', '_');
+            Files.writeString(dir.resolve(ts + ".json"), json, StandardCharsets.UTF_8);
+            pruneHistory(dir);
+        } catch (Exception e) {
+            ServerLeaderboardMod.LOGGER.warn("[排行榜] 历史快照归档失败: {}", e.toString());
+        }
+    }
+
+    /**
+     * 后台线程：按 historyKeep 清理最旧快照，文件名即时间戳，字典序即时间序。
+     * historyKeep 为 0 表示关闭归档，不清空已有快照。
+     */
+    private static void pruneHistory(Path dir) {
+        int keep = LeaderboardConfig.get().historyKeep;
+        if (keep <= 0) {
+            return;
+        }
+        try {
+            List<Path> files = new ArrayList<>();
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, "*.json")) {
+                for (Path p : stream) {
+                    files.add(p);
+                }
+            }
+            files.sort(Comparator.comparing(p -> p.getFileName().toString()));
+            int excess = files.size() - keep;
+            for (int i = 0; i < excess; i++) {
+                Files.deleteIfExists(files.get(i));
+            }
+            if (excess > 0) {
+                ServerLeaderboardMod.LOGGER.info("[排行榜] 已清理 {} 个超量历史快照", excess);
+            }
+        } catch (Exception e) {
+            ServerLeaderboardMod.LOGGER.warn("[排行榜] 清理历史快照失败: {}", e.toString());
+        }
+    }
+
+    /** 修改保留数量后在后台立即执行一次清理 */
+    public static void pruneHistoryAsync() {
+        Path dir = FabricLoader.getInstance().getGameDir().resolve("leaderboard").resolve("history");
+        if (!Files.isDirectory(dir)) {
+            return;
+        }
+        EXECUTOR.submit(() -> pruneHistory(dir));
     }
 
     /** 孤儿 stats 文件提醒：每个 UUID 本会话只提醒一次 */
@@ -347,11 +410,41 @@ public final class LeaderboardGenerator {
             JsonObject o = new JsonObject();
             o.addProperty("rank", rank);
             o.addProperty("name", name);
+            String uuid = data.getUuids().get(name);
+            if (uuid != null) {
+                o.addProperty("uuid", uuid);
+            }
             o.addProperty("score", data.getScore().get(name));
             o.addProperty("titles", data.getTitles().get(name));
             overall.add(o);
         }
         root.add("overall", overall);
+
+        // 全服 9 项核心数据总和
+        long totalPlayTime = 0, totalDeaths = 0, totalMobKills = 0, totalDamageDealt = 0,
+                totalDamageTaken = 0, totalDistance = 0, totalMined = 0, totalCrafted = 0, totalAviate = 0;
+        for (LeaderboardData.PlayerSummary ps : data.getPlayerSummary().values()) {
+            totalPlayTime += ps.playTime();
+            totalDeaths += ps.deaths();
+            totalMobKills += ps.mobKills();
+            totalDamageDealt += ps.damageDealt();
+            totalDamageTaken += ps.damageTaken();
+            totalDistance += ps.distance();
+            totalMined += ps.minedTotal();
+            totalCrafted += ps.craftedTotal();
+            totalAviate += ps.aviate();
+        }
+        JsonObject totals = new JsonObject();
+        totals.addProperty("total_play_time", totalPlayTime);
+        totals.addProperty("total_deaths", totalDeaths);
+        totals.addProperty("total_mob_kills", totalMobKills);
+        totals.addProperty("total_damage_dealt", totalDamageDealt);
+        totals.addProperty("total_damage_taken", totalDamageTaken);
+        totals.addProperty("total_distance", totalDistance);
+        totals.addProperty("total_mined", totalMined);
+        totals.addProperty("total_crafted", totalCrafted);
+        totals.addProperty("total_aviate", totalAviate);
+        root.add("server_totals", totals);
 
         JsonArray kings = new JsonArray();
         for (LeaderboardData.CustomLeader leader : data.getLeadersCustom()) {

@@ -21,16 +21,20 @@ public class LeaderboardData {
     private final Map<String, Integer> titles;
     /** 玩家 -> 关键数据总览 */
     private final Map<String, PlayerSummary> playerSummary;
+    /** 玩家名 -> UUID（小写带连字符，与 stats 文件名一致） */
+    private final Map<String, String> uuids;
 
     public LeaderboardData(List<CustomLeader> leadersCustom, Map<String, List<ItemRow>> leadersItems,
                            List<String> overall, Map<String, Integer> score,
-                           Map<String, Integer> titles, Map<String, PlayerSummary> playerSummary) {
+                           Map<String, Integer> titles, Map<String, PlayerSummary> playerSummary,
+                           Map<String, String> uuids) {
         this.leadersCustom = Collections.unmodifiableList(List.copyOf(leadersCustom));
         this.leadersItems = Collections.unmodifiableMap(new LinkedHashMap<>(leadersItems));
         this.overall = Collections.unmodifiableList(List.copyOf(overall));
         this.score = Collections.unmodifiableMap(new LinkedHashMap<>(score));
         this.titles = Collections.unmodifiableMap(new LinkedHashMap<>(titles));
         this.playerSummary = Collections.unmodifiableMap(new LinkedHashMap<>(playerSummary));
+        this.uuids = Collections.unmodifiableMap(new LinkedHashMap<>(uuids));
     }
 
     public List<CustomLeader> getLeadersCustom() {
@@ -55,6 +59,11 @@ public class LeaderboardData {
 
     public Map<String, PlayerSummary> getPlayerSummary() {
         return playerSummary;
+    }
+
+    /** 玩家名 -> UUID（小写带连字符，与 stats 文件名一致） */
+    public Map<String, String> getUuids() {
+        return uuids;
     }
 
     public boolean isEmpty() {
