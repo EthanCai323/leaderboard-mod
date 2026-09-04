@@ -1,6 +1,7 @@
 package com.ethan.leaderboard;
 
 import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.CommandSource;
@@ -36,6 +37,7 @@ import static net.minecraft.server.command.CommandManager.literal;
  * /leaderboard screen remove prefix/suffix <> 按类型移除名称筛除特征（仅 OP）
  * /leaderboard screen list                    查看名称筛除特征（仅 OP）
  * /leaderboard allowscoreboard [true/false]   查看或设置普通玩家计分板权限（仅 OP）
+ * /leaderboard history [数量]                 查看或设置历史快照保留数量（仅 OP，0 关闭）
  * /leaderboard reload                         重新加载全部配置并后台重新生成（仅 OP）
  * /leaderboard scoreboard on|off              个人侧边计分板（任何玩家）
  * /leaderboard help                           指令帮助（任何玩家；OP 追加显示管理指令）
@@ -137,6 +139,12 @@ public final class LeaderboardCommands {
                                 .then(argument("enabled", BoolArgumentType.bool())
                                         .executes(ctx -> setAllowScoreboard(ctx.getSource(),
                                                 BoolArgumentType.getBool(ctx, "enabled")))))
+                        .then(literal("history")
+                                .requires(LeaderboardCommands::isOp)
+                                .executes(ctx -> showHistory(ctx.getSource()))
+                                .then(argument("keep", IntegerArgumentType.integer(0))
+                                        .executes(ctx -> setHistory(ctx.getSource(),
+                                                IntegerArgumentType.getInteger(ctx, "keep")))))
                         .then(literal("reload")
                                 .requires(LeaderboardCommands::isOp)
                                 .executes(ctx -> reloadConfigs(ctx.getSource())))
@@ -519,6 +527,31 @@ public final class LeaderboardCommands {
         return 1;
     }
 
+    // ---------- history ----------
+
+    /** 无参数：显示当前历史快照保留数量 */
+    private static int showHistory(ServerCommandSource src) {
+        int keep = LeaderboardConfig.get().historyKeep;
+        if (keep <= 0) {
+            src.sendMessage(Text.literal("当前已关闭历史快照归档").formatted(Formatting.GRAY));
+        } else {
+            src.sendMessage(Text.literal("当前历史快照保留数量：" + keep).formatted(Formatting.GRAY));
+        }
+        return 1;
+    }
+
+    private static int setHistory(ServerCommandSource src, int keep) {
+        LeaderboardConfig.get().historyKeep = keep;
+        LeaderboardConfig.save();
+        if (keep <= 0) {
+            src.sendMessage(Text.literal("已关闭历史快照归档，已有快照保留").formatted(Formatting.GREEN));
+        } else {
+            src.sendMessage(Text.literal("历史快照保留数量已设置为 " + keep).formatted(Formatting.GREEN));
+            LeaderboardGenerator.pruneHistoryAsync();
+        }
+        return 1;
+    }
+
     // ---------- scoreboard ----------
 
     private static int scoreboard(ServerCommandSource src, boolean on) {
@@ -568,6 +601,8 @@ public final class LeaderboardCommands {
             src.sendMessage(Text.literal("/leaderboard screen list - 查看名称筛除特征")
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard allowscoreboard [true|false] - 查看或设置普通玩家计分板权限")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard history [数量] - 查看或设置历史快照保留数量，0 为关闭")
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard reload - 重新加载配置并重新生成排行榜")
                     .formatted(Formatting.GRAY));

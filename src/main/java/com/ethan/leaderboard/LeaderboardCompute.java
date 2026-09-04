@@ -37,7 +37,8 @@ public final class LeaderboardCompute {
         return byStat.getOrDefault(stat, 0L);
     }
 
-    public static LeaderboardData compute(Map<String, Map<String, Map<String, Long>>> allStats) {
+    public static LeaderboardData compute(Map<String, Map<String, Map<String, Long>>> allStats,
+                                          Map<String, String> nameToUuid) {
         List<String> players = new ArrayList<>(allStats.keySet());
 
         // --- custom 类逐项排行 ---
@@ -191,7 +192,8 @@ public final class LeaderboardCompute {
             return a.compareTo(b);
         });
 
-        return new LeaderboardData(leadersCustom, leadersItems, overall, score, titles, playerSummary);
+        return new LeaderboardData(leadersCustom, leadersItems, overall, score, titles, playerSummary,
+                nameToUuid);
     }
 
     /** 精简模式评分：按玩家总览中的某一项核心数据排名给分 */

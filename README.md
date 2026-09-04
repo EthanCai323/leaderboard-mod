@@ -11,6 +11,7 @@ Minecraft 1.21.7 Fabric 服务端模组：自动统计玩家数据并生成排�
 - **四种显示模式**：精简 / 普通 / 全部 / 自定义（自定义模式通过 `custom_display.txt` 逐项控制）；综合得分只统计当前模式实际显示的分类与统计项（精简模式只算 9 项核心数据，普通模式物品/生物每类只算前 36 项）
 - **个人侧边计分板**：玩家可用 `/leaderboard scoreboard on` 开关显示自己的 9 项核心数据，OP 可用 `/leaderboard allowscoreboard false` 全局禁止
 - **可调刷新间隔**：`/leaderboard refresh interval 30s` 支持 t/s/m/h 单位，0 关闭自动刷新；`/leaderboard refresh broadcast false` 可关闭刷新广播
+- **历史快照归档**：每次生成后把 `leaderboard.json` 归档到 `leaderboard/history/`，默认保留 30 份，可用 `/leaderboard history` 调整；JSON 内含玩家 UUID 与全服 9 项核心数据总和
 
 ## 假人筛除策略
 
@@ -40,6 +41,7 @@ Minecraft 1.21.7 Fabric 服务端模组：自动统计玩家数据并生成排�
 | `/leaderboard screen list` | OP | 查看当前名称筛除特征 |
 | `/leaderboard allowscoreboard [true\|false]` | OP | 设置是否允许普通玩家开启侧边计分板；无参数时查看当前状态 |
 | `/leaderboard reload` | OP | 重新加载全部配置文件并后台重新生成排行榜 |
+| `/leaderboard history [数量]` | OP | 查看或设置历史快照保留数量，0 为关闭；快照保存在 `leaderboard/history/` |
 | `/leaderboard scoreboard on\|off` | 所有人 | 开关个人侧边计分板 |
 | `/leaderboard help` | 所有人 | 显示指令帮助（OP 追加显示管理指令） |
 
@@ -55,6 +57,7 @@ leaderboard/
 ├── scoreboard.json      # 开启侧边计分板的玩家
 ├── stat_names.json      # 通用分类统计项中文名（可改，改动自动热重载）
 ├── custom_display.txt   # 自定义模式逐项开关（stat_id true/false）
+├── history/             # 历史快照归档（leaderboard.json 的带时间戳副本，默认保留 30 份）
 └── lang/zh_cn.json      # 中文翻译表（需自行放置，见下）
 ```
 
