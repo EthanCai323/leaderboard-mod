@@ -1,5 +1,6 @@
 package com.ethan.leaderboard;
 
+import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.CommandSource;
@@ -10,6 +11,7 @@ import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -22,14 +24,20 @@ import static net.minecraft.server.command.CommandManager.literal;
 
 /**
  * /leaderboard 指令树：
- * /leaderboard                        玩家开 GUI；控制台/RCON 输出聊天文字版
- * /leaderboard refresh                手动刷新（权限等级 2）
- * /leaderboard refresh interval <arg> 自动刷新间隔（仅 OP）
- * /leaderboard mode <模式>            显示模式（仅 OP）
- * /leaderboard player list [all]      玩家名单（仅 OP）
- * /leaderboard player add/remove <名> 白/黑名单（仅 OP）
- * /leaderboard scoreboard on|off      个人侧边计分板（任何玩家）
- * /leaderboard help                   指令帮助（任何玩家；OP 追加显示管理指令）
+ * /leaderboard                                玩家开 GUI；控制台/RCON 输出聊天文字版
+ * /leaderboard refresh                        手动刷新（仅 OP，后台异步生成）
+ * /leaderboard refresh interval <arg>         自动刷新间隔（仅 OP）
+ * /leaderboard refresh broadcast true/false   是否广播自动刷新的聊天提示（仅 OP）
+ * /leaderboard mode <模式>                    显示模式（仅 OP）
+ * /leaderboard player list [all]              玩家名单（仅 OP）
+ * /leaderboard player whitelist add/remove <> 白名单管理（仅 OP）
+ * /leaderboard player blacklist add/remove <> 黑名单管理（仅 OP）
+ * /leaderboard screen prefix/suffix <特征>    添加名称筛除特征（仅 OP）
+ * /leaderboard screen remove <特征>           移除名称筛除特征（仅 OP）
+ * /leaderboard screen list                    查看名称筛除特征（仅 OP）
+ * /leaderboard allowscoreboard true/false     是否允许普通玩家开启侧边计分板（仅 OP）
+ * /leaderboard scoreboard on|off              个人侧边计分板（任何玩家）
+ * /leaderboard help                           指令帮助（任何玩家；OP 追加显示管理指令）
  */
 public final class LeaderboardCommands {
     private static final Pattern INTERVAL_PATTERN = Pattern.compile("^(\\d+)(t|s|m|h)?$");
@@ -47,7 +55,11 @@ public final class LeaderboardCommands {
                                 .then(literal("interval")
                                         .then(argument("value", StringArgumentType.word())
                                                 .executes(ctx -> setInterval(ctx.getSource(),
-                                                        StringArgumentType.getString(ctx, "value"))))))
+                                                        StringArgumentType.getString(ctx, "value")))))
+                                .then(literal("broadcast")
+                                        .then(argument("enabled", BoolArgumentType.bool())
+                                                .executes(ctx -> setBroadcast(ctx.getSource(),
+                                                        BoolArgumentType.getBool(ctx, "enabled"))))))
                         .then(literal("mode")
                                 .then(argument("mode", StringArgumentType.word())
                                         .suggests((ctx, builder) -> CommandSource.suggestMatching(MODES, builder))
@@ -58,14 +70,43 @@ public final class LeaderboardCommands {
                                         .executes(ctx -> playerList(ctx.getSource(), false))
                                         .then(literal("all")
                                                 .executes(ctx -> playerList(ctx.getSource(), true))))
-                                .then(literal("add")
-                                        .then(argument("name", StringArgumentType.word())
-                                                .executes(ctx -> playerAdd(ctx.getSource(),
-                                                        StringArgumentType.getString(ctx, "name")))))
+                                .then(literal("whitelist")
+                                        .then(literal("add")
+                                                .then(argument("name", StringArgumentType.word())
+                                                        .executes(ctx -> whitelistAdd(ctx.getSource(),
+                                                                StringArgumentType.getString(ctx, "name")))))
+                                        .then(literal("remove")
+                                                .then(argument("name", StringArgumentType.word())
+                                                        .executes(ctx -> whitelistRemove(ctx.getSource(),
+                                                                StringArgumentType.getString(ctx, "name"))))))
+                                .then(literal("blacklist")
+                                        .then(literal("add")
+                                                .then(argument("name", StringArgumentType.word())
+                                                        .executes(ctx -> blacklistAdd(ctx.getSource(),
+                                                                StringArgumentType.getString(ctx, "name")))))
+                                        .then(literal("remove")
+                                                .then(argument("name", StringArgumentType.word())
+                                                        .executes(ctx -> blacklistRemove(ctx.getSource(),
+                                                                StringArgumentType.getString(ctx, "name")))))))
+                        .then(literal("screen")
+                                .then(literal("prefix")
+                                        .then(argument("value", StringArgumentType.word())
+                                                .executes(ctx -> screenAdd(ctx.getSource(), true,
+                                                        StringArgumentType.getString(ctx, "value")))))
+                                .then(literal("suffix")
+                                        .then(argument("value", StringArgumentType.word())
+                                                .executes(ctx -> screenAdd(ctx.getSource(), false,
+                                                        StringArgumentType.getString(ctx, "value")))))
                                 .then(literal("remove")
-                                        .then(argument("name", StringArgumentType.word())
-                                                .executes(ctx -> playerRemove(ctx.getSource(),
-                                                        StringArgumentType.getString(ctx, "name"))))))
+                                        .then(argument("value", StringArgumentType.word())
+                                                .executes(ctx -> screenRemove(ctx.getSource(),
+                                                        StringArgumentType.getString(ctx, "value")))))
+                                .then(literal("list")
+                                        .executes(ctx -> screenList(ctx.getSource()))))
+                        .then(literal("allowscoreboard")
+                                .then(argument("enabled", BoolArgumentType.bool())
+                                        .executes(ctx -> setAllowScoreboard(ctx.getSource(),
+                                                BoolArgumentType.getBool(ctx, "enabled")))))
                         .then(literal("help").executes(ctx -> help(ctx.getSource())))
                         .then(literal("scoreboard")
                                 .then(literal("on")
@@ -83,14 +124,21 @@ public final class LeaderboardCommands {
         return true;
     }
 
-    /** 无数据时先生成一次 */
+    /**
+     * 获取最近一次生成的数据；无数据时触发一次后台生成并返回 null。
+     * 调用方需处理 null（提示玩家稍后再试）。
+     */
     private static LeaderboardData ensureData(ServerCommandSource src) {
         LeaderboardData data = LeaderboardGenerator.getLastData();
         if (data == null) {
-            LeaderboardGenerator.generate(src.getServer());
-            data = LeaderboardGenerator.getLastData();
+            LeaderboardGenerator.requestGenerate(src.getServer(), null);
         }
         return data;
+    }
+
+    /** 名单或筛除规则变更后触发一次后台重新生成 */
+    private static void regenerateQuietly(ServerCommandSource src) {
+        LeaderboardGenerator.requestGenerate(src.getServer(), null);
     }
 
     // ---------- /leaderboard ----------
@@ -98,8 +146,8 @@ public final class LeaderboardCommands {
     /** 打开 GUI；非玩家来源回退到聊天文字版 */
     private static int openLeaderboard(ServerCommandSource src) {
         LeaderboardData data = ensureData(src);
-        if (data == null || data.overall.isEmpty()) {
-            src.sendMessage(Text.literal("暂无排行榜数据，请稍后再试").formatted(Formatting.RED));
+        if (data == null || data.isEmpty()) {
+            src.sendMessage(Text.literal("暂无排行榜数据，正在后台生成，请稍后再试").formatted(Formatting.RED));
             return 0;
         }
         if (src.getEntity() instanceof ServerPlayerEntity player) {
@@ -112,13 +160,14 @@ public final class LeaderboardCommands {
     /** 聊天文字版（控制台/RCON 兜底） */
     private static int showOverallChat(ServerCommandSource src, LeaderboardData data) {
         src.sendMessage(Text.literal("—— 综合排行榜 TOP 10 ——").formatted(Formatting.GOLD));
-        int limit = Math.min(10, data.overall.size());
+        int limit = Math.min(10, data.getOverall().size());
         for (int i = 0; i < limit; i++) {
-            String name = data.overall.get(i);
+            String name = data.getOverall().get(i);
             int rank = i + 1;
             Text line = Text.literal("#" + rank + " " + name)
                     .formatted(rank <= 3 ? Formatting.GOLD : Formatting.GREEN)
-                    .append(Text.literal(" - " + data.score.get(name) + " 分，冠军 " + data.titles.get(name) + " 项")
+                    .append(Text.literal(" - " + data.getScore().get(name) + " 分，冠军 "
+                            + data.getTitles().get(name) + " 项")
                             .formatted(Formatting.GREEN));
             src.sendMessage(line);
         }
@@ -131,16 +180,22 @@ public final class LeaderboardCommands {
         if (notOp(src)) {
             return 0;
         }
-        boolean ok = LeaderboardGenerator.generate(src.getServer());
-        if (ok) {
-            LeaderboardData data = LeaderboardGenerator.getLastData();
-            String top = data.overall.get(0);
-            src.sendFeedback(() -> Text.literal("排行榜已重新生成，综合第一：" + top
-                    + "（" + data.score.get(top) + " 分）").formatted(Formatting.GREEN), true);
-            return 1;
+        boolean started = LeaderboardGenerator.requestGenerate(src.getServer(), ok -> {
+            if (ok) {
+                LeaderboardData data = LeaderboardGenerator.getLastData();
+                String top = data.getOverall().get(0);
+                src.sendFeedback(() -> Text.literal("排行榜已重新生成，综合第一：" + top
+                        + "（" + data.getScore().get(top) + " 分）").formatted(Formatting.GREEN), true);
+            } else {
+                src.sendError(Text.literal("排行榜生成失败，请查看服务端日志"));
+            }
+        });
+        if (!started) {
+            src.sendMessage(Text.literal("上一次生成尚未完成，请稍候").formatted(Formatting.RED));
+            return 0;
         }
-        src.sendError(Text.literal("排行榜生成失败，请查看服务端日志"));
-        return 0;
+        src.sendMessage(Text.literal("正在后台生成排行榜").formatted(Formatting.GRAY));
+        return 1;
     }
 
     // ---------- refresh interval ----------
@@ -183,6 +238,19 @@ public final class LeaderboardCommands {
         return String.format(Locale.US, "%.1f", ticks / 20.0);
     }
 
+    // ---------- refresh broadcast ----------
+
+    private static int setBroadcast(ServerCommandSource src, boolean enabled) {
+        if (notOp(src)) {
+            return 0;
+        }
+        LeaderboardConfig.get().broadcastRefresh = enabled;
+        LeaderboardConfig.save();
+        src.sendMessage(Text.literal(enabled ? "已开启自动刷新广播" : "已关闭自动刷新广播")
+                .formatted(Formatting.GREEN));
+        return 1;
+    }
+
     // ---------- mode ----------
 
     private static int setMode(ServerCommandSource src, String mode) {
@@ -200,10 +268,10 @@ public final class LeaderboardCommands {
             LeaderboardData data = ensureData(src);
             if (data != null) {
                 Set<String> ids = new TreeSet<>();
-                for (LeaderboardData.CustomLeader leader : data.leadersCustom) {
+                for (LeaderboardData.CustomLeader leader : data.getLeadersCustom()) {
                     ids.add(leader.stat());
                 }
-                for (java.util.List<LeaderboardData.ItemRow> rows : data.leadersItems.values()) {
+                for (List<LeaderboardData.ItemRow> rows : data.getLeadersItems().values()) {
                     for (LeaderboardData.ItemRow row : rows) {
                         ids.add(row.stat());
                     }
@@ -211,7 +279,7 @@ public final class LeaderboardCommands {
                 CustomDisplay.writeDefaults(ids);
             }
         }
-        CustomDisplay.load();
+        CustomDisplay.loadIfChanged();
         String label = switch (mode) {
             case LeaderboardConfig.MODE_COMPACT -> "精简";
             case LeaderboardConfig.MODE_FULL -> "全部";
@@ -231,11 +299,8 @@ public final class LeaderboardCommands {
         if (all) {
             Map<String, Boolean> allPlayers = LeaderboardGenerator.getLastAllPlayers();
             if (allPlayers.isEmpty()) {
-                LeaderboardGenerator.generate(src.getServer());
-                allPlayers = LeaderboardGenerator.getLastAllPlayers();
-            }
-            if (allPlayers.isEmpty()) {
-                src.sendMessage(Text.literal("暂无排行榜数据，请稍后再试").formatted(Formatting.RED));
+                LeaderboardGenerator.requestGenerate(src.getServer(), null);
+                src.sendMessage(Text.literal("暂无排行榜数据，正在后台生成，请稍后再试").formatted(Formatting.RED));
                 return 0;
             }
             src.sendMessage(Text.literal("—— 全部有统计记录的玩家（共 " + allPlayers.size() + " 人）——")
@@ -250,53 +315,154 @@ public final class LeaderboardCommands {
             return 1;
         }
         LeaderboardData data = ensureData(src);
-        if (data == null || data.overall.isEmpty()) {
-            src.sendMessage(Text.literal("暂无排行榜数据，请稍后再试").formatted(Formatting.RED));
+        if (data == null || data.isEmpty()) {
+            src.sendMessage(Text.literal("暂无排行榜数据，正在后台生成，请稍后再试").formatted(Formatting.RED));
             return 0;
         }
-        src.sendMessage(Text.literal("—— 排行榜包含的玩家（共 " + data.overall.size() + " 人）——")
+        src.sendMessage(Text.literal("—— 排行榜包含的玩家（共 " + data.getOverall().size() + " 人）——")
                 .formatted(Formatting.GOLD));
-        for (String name : data.overall) {
+        for (String name : data.getOverall()) {
             src.sendMessage(Text.literal(name).formatted(Formatting.GREEN));
         }
         return 1;
     }
 
-    private static int playerAdd(ServerCommandSource src, String name) {
+    private static int whitelistAdd(ServerCommandSource src, String name) {
         if (notOp(src)) {
             return 0;
         }
-        int result = PlayerFilter.addWhitelist(name);
-        if (result == PlayerFilter.RESULT_BLOCKED_BY_OTHER_LIST) {
-            src.sendMessage(Text.literal(name + "已在黑名单中，请先将" + name + "移出黑名单！")
-                    .formatted(Formatting.RED));
-            return 0;
+        int result = PlayerFilter.whitelistAdd(name);
+        switch (result) {
+            case PlayerFilter.ADD_MOVED_FROM_OTHER ->
+                    src.sendMessage(Text.literal("已将" + name + "从黑名单移至白名单").formatted(Formatting.GREEN));
+            case PlayerFilter.ADD_ALREADY ->
+                    src.sendMessage(Text.literal(name + "已在白名单中").formatted(Formatting.YELLOW));
+            default ->
+                    src.sendMessage(Text.literal("已将" + name + "添加至白名单").formatted(Formatting.GREEN));
         }
-        if (result == PlayerFilter.RESULT_TOGGLED_OFF) {
-            src.sendMessage(Text.literal("已将" + name + "移出leaderboard白名单").formatted(Formatting.GREEN));
-        } else {
-            src.sendMessage(Text.literal("已将" + name + "添加至leaderboard白名单中").formatted(Formatting.GREEN));
+        if (result != PlayerFilter.ADD_ALREADY) {
+            regenerateQuietly(src);
         }
-        LeaderboardGenerator.generate(src.getServer());
         return 1;
     }
 
-    private static int playerRemove(ServerCommandSource src, String name) {
+    private static int whitelistRemove(ServerCommandSource src, String name) {
         if (notOp(src)) {
             return 0;
         }
-        int result = PlayerFilter.addBlacklist(name);
-        if (result == PlayerFilter.RESULT_BLOCKED_BY_OTHER_LIST) {
-            src.sendMessage(Text.literal(name + "已在白名单中，请先将" + name + "移出白名单！")
-                    .formatted(Formatting.RED));
+        if (PlayerFilter.whitelistRemove(name) == PlayerFilter.REMOVE_NOT_FOUND) {
+            src.sendMessage(Text.literal(name + "不在白名单中").formatted(Formatting.RED));
             return 0;
         }
-        if (result == PlayerFilter.RESULT_TOGGLED_OFF) {
-            src.sendMessage(Text.literal("已将" + name + "移出leaderboard黑名单").formatted(Formatting.GREEN));
-        } else {
-            src.sendMessage(Text.literal("已将" + name + "添加至leaderboard黑名单中").formatted(Formatting.GREEN));
+        src.sendMessage(Text.literal("已将" + name + "移出白名单").formatted(Formatting.GREEN));
+        regenerateQuietly(src);
+        return 1;
+    }
+
+    private static int blacklistAdd(ServerCommandSource src, String name) {
+        if (notOp(src)) {
+            return 0;
         }
-        LeaderboardGenerator.generate(src.getServer());
+        int result = PlayerFilter.blacklistAdd(name);
+        switch (result) {
+            case PlayerFilter.ADD_MOVED_FROM_OTHER ->
+                    src.sendMessage(Text.literal("已将" + name + "从白名单移至黑名单").formatted(Formatting.GREEN));
+            case PlayerFilter.ADD_ALREADY ->
+                    src.sendMessage(Text.literal(name + "已在黑名单中").formatted(Formatting.YELLOW));
+            default ->
+                    src.sendMessage(Text.literal("已将" + name + "添加至黑名单").formatted(Formatting.GREEN));
+        }
+        if (result != PlayerFilter.ADD_ALREADY) {
+            regenerateQuietly(src);
+        }
+        return 1;
+    }
+
+    private static int blacklistRemove(ServerCommandSource src, String name) {
+        if (notOp(src)) {
+            return 0;
+        }
+        if (PlayerFilter.blacklistRemove(name) == PlayerFilter.REMOVE_NOT_FOUND) {
+            src.sendMessage(Text.literal(name + "不在黑名单中").formatted(Formatting.RED));
+            return 0;
+        }
+        src.sendMessage(Text.literal("已将" + name + "移出黑名单").formatted(Formatting.GREEN));
+        regenerateQuietly(src);
+        return 1;
+    }
+
+    // ---------- screen ----------
+
+    private static int screenAdd(ServerCommandSource src, boolean prefix, String value) {
+        if (notOp(src)) {
+            return 0;
+        }
+        List<String> list = prefix
+                ? LeaderboardConfig.get().screenPrefixes
+                : LeaderboardConfig.get().screenSuffixes;
+        String kind = prefix ? "前缀" : "后缀";
+        String key = value.toLowerCase(Locale.ROOT);
+        for (String existing : list) {
+            if (existing.equalsIgnoreCase(key)) {
+                src.sendMessage(Text.literal("筛除" + kind + " " + value + " 已存在").formatted(Formatting.YELLOW));
+                return 0;
+            }
+        }
+        list.add(value);
+        LeaderboardConfig.save();
+        src.sendMessage(Text.literal("已添加筛除" + kind + "：" + value).formatted(Formatting.GREEN));
+        regenerateQuietly(src);
+        return 1;
+    }
+
+    private static int screenRemove(ServerCommandSource src, String value) {
+        if (notOp(src)) {
+            return 0;
+        }
+        String key = value.toLowerCase(Locale.ROOT);
+        LeaderboardConfig config = LeaderboardConfig.get();
+        boolean removed = config.screenPrefixes.removeIf(s -> s.toLowerCase(Locale.ROOT).equals(key))
+                | config.screenSuffixes.removeIf(s -> s.toLowerCase(Locale.ROOT).equals(key));
+        if (!removed) {
+            src.sendMessage(Text.literal("筛除特征 " + value + " 不存在").formatted(Formatting.RED));
+            return 0;
+        }
+        LeaderboardConfig.save();
+        src.sendMessage(Text.literal("已移除筛除特征：" + value).formatted(Formatting.GREEN));
+        regenerateQuietly(src);
+        return 1;
+    }
+
+    private static int screenList(ServerCommandSource src) {
+        if (notOp(src)) {
+            return 0;
+        }
+        LeaderboardConfig config = LeaderboardConfig.get();
+        src.sendMessage(Text.literal("—— 名称筛除特征 ——").formatted(Formatting.GOLD));
+        src.sendMessage(Text.literal("前缀：" + (config.screenPrefixes.isEmpty()
+                        ? "无" : String.join("、", config.screenPrefixes)))
+                .formatted(Formatting.GRAY));
+        src.sendMessage(Text.literal("后缀：" + (config.screenSuffixes.isEmpty()
+                        ? "无" : String.join("、", config.screenSuffixes)))
+                .formatted(Formatting.GRAY));
+        return 1;
+    }
+
+    // ---------- allowscoreboard ----------
+
+    private static int setAllowScoreboard(ServerCommandSource src, boolean enabled) {
+        if (notOp(src)) {
+            return 0;
+        }
+        LeaderboardConfig.get().allowScoreboard = enabled;
+        LeaderboardConfig.save();
+        if (enabled) {
+            src.sendMessage(Text.literal("已允许普通玩家开启侧边计分板").formatted(Formatting.GREEN));
+        } else {
+            SidebarScoreboards.disableAllForNonOps(src.getServer());
+            src.sendMessage(Text.literal("已禁止普通玩家开启侧边计分板，已开启的非 OP 玩家计分板已关闭")
+                    .formatted(Formatting.GREEN));
+        }
         return 1;
     }
 
@@ -307,7 +473,10 @@ public final class LeaderboardCommands {
             src.sendMessage(Text.literal("仅玩家可用此指令").formatted(Formatting.RED));
             return 0;
         }
-        SidebarScoreboards.setEnabled(player, on);
+        if (!SidebarScoreboards.setEnabled(player, on)) {
+            src.sendMessage(Text.literal("管理员已禁止普通玩家开启侧边计分板").formatted(Formatting.RED));
+            return 0;
+        }
         src.sendMessage(Text.literal(on ? "已开启侧边计分板" : "已关闭侧边计分板").formatted(Formatting.GREEN));
         return 1;
     }
@@ -329,11 +498,23 @@ public final class LeaderboardCommands {
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard refresh interval <数字>[t|s|m|h] - 设置自动刷新间隔")
                     .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard refresh broadcast true|false - 开关自动刷新广播")
+                    .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard mode <compact|normal|full|custom> - 切换显示模式")
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard player list [all] - 查看玩家名单")
                     .formatted(Formatting.GRAY));
-            src.sendMessage(Text.literal("/leaderboard player add/remove <玩家名> - 管理白/黑名单")
+            src.sendMessage(Text.literal("/leaderboard player whitelist add/remove <玩家名> - 管理白名单")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard player blacklist add/remove <玩家名> - 管理黑名单")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard screen prefix/suffix <特征> - 添加名称筛除特征")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard screen remove <特征> - 移除名称筛除特征")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard screen list - 查看名称筛除特征")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard allowscoreboard true|false - 是否允许普通玩家开启侧边计分板")
                     .formatted(Formatting.GRAY));
         }
         return 1;

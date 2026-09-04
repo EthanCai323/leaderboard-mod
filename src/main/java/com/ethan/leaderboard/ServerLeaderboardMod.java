@@ -31,8 +31,9 @@ public class ServerLeaderboardMod implements DedicatedServerModInitializer {
             LeaderboardConfig.load();
             PlayerFilter.load();
             SidebarScoreboards.load();
-            CustomDisplay.load();
-            Lang.reload();
+            CustomDisplay.loadIfChanged();
+            Lang.reloadIfChanged();
+            StatFormat.loadStatNamesIfChanged();
             tickCounter = 0;
             long interval = LeaderboardConfig.get().refreshIntervalTicks;
             nextRunAt = interval > 0 ? FIRST_DELAY_TICKS : Long.MAX_VALUE;
@@ -71,20 +72,24 @@ public class ServerLeaderboardMod implements DedicatedServerModInitializer {
         nextRunAt = interval > 0 ? tickCounter + interval : Long.MAX_VALUE;
     }
 
-    /** 定时刷新并广播综合第一 */
+    /** 定时刷新并按配置广播综合第一 */
     public static void runAndBroadcast(MinecraftServer server) {
-        boolean ok = LeaderboardGenerator.generate(server);
-        if (!ok) {
-            return;
+        boolean started = LeaderboardGenerator.requestGenerate(server, ok -> {
+            if (!ok || !LeaderboardConfig.get().broadcastRefresh) {
+                return;
+            }
+            LeaderboardData data = LeaderboardGenerator.getLastData();
+            if (data == null || data.isEmpty()) {
+                return;
+            }
+            String top = data.getOverall().get(0);
+            server.getPlayerManager().broadcast(
+                    Text.literal("排行榜已更新，综合第一：" + top + "，" + data.getScore().get(top)
+                            + " 分。输入 /leaderboard 查看").formatted(Formatting.GOLD),
+                    false);
+        });
+        if (!started) {
+            LOGGER.info("[排行榜] 上一次生成尚未完成，跳过本次自动刷新");
         }
-        LeaderboardData data = LeaderboardGenerator.getLastData();
-        if (data == null || data.overall.isEmpty()) {
-            return;
-        }
-        String top = data.overall.get(0);
-        server.getPlayerManager().broadcast(
-                Text.literal("排行榜已更新，综合第一：" + top + "，" + data.score.get(top)
-                        + " 分。输入 /leaderboard 查看").formatted(Formatting.GOLD),
-                false);
     }
 }

@@ -1,12 +1,22 @@
 package com.ethan.leaderboard;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import net.fabricmc.loader.api.FabricLoader;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * 统计项中文名表 / 单位换算，移植自 leaderboard.py
+ * 统计项中文名表 / 单位换算，移植自 leaderboard.py。
+ * custom 统计名从 leaderboard/stat_names.json 读取（首次运行写入默认值），
+ * 基于文件修改时间热重载。
  */
 public final class StatFormat {
     public static final String BOT_PREFIX = "bot_";
@@ -28,10 +38,13 @@ public final class StatFormat {
             "minecraft:damage_resisted", "minecraft:damage_dealt_absorbed",
             "minecraft:damage_dealt_resisted");
 
-    public static final Map<String, String> CUSTOM_STAT_NAMES = new LinkedHashMap<>();
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+    /** custom 统计中文名默认值（首次运行写入 stat_names.json，之后以文件为准） */
+    private static final Map<String, String> DEFAULT_STAT_NAMES = new LinkedHashMap<>();
 
     static {
-        Map<String, String> m = CUSTOM_STAT_NAMES;
+        Map<String, String> m = DEFAULT_STAT_NAMES;
         m.put("minecraft:play_time", "游戏时间");
         m.put("minecraft:deaths", "死亡次数");
         m.put("minecraft:mob_kills", "击杀生物");
@@ -106,6 +119,10 @@ public final class StatFormat {
         m.put("minecraft:leave_game", "离开游戏次数");
     }
 
+    private static volatile Map<String, String> customStatNames = DEFAULT_STAT_NAMES;
+    /** 上次加载时文件的修改时间（毫秒），-1 表示尚未加载 */
+    private static long lastLoadedModified = -1L;
+
     /** 8 个物品分类（保持与 Python 一致的输出顺序） */
     public static final Map<String, String> CATEGORY_NAMES = new LinkedHashMap<>();
 
@@ -124,6 +141,50 @@ public final class StatFormat {
     public static final int TOP_ITEMS_PER_CATEGORY = 30;
 
     private StatFormat() {
+    }
+
+    private static Path statNamesPath() {
+        return FabricLoader.getInstance().getGameDir().resolve("leaderboard").resolve("stat_names.json");
+    }
+
+    /**
+     * 基于文件修改时间的懒加载：文件未变化时直接返回。
+     * 文件不存在时写入默认表；解析失败时回退默认表。
+     */
+    public static synchronized void loadStatNamesIfChanged() {
+        Path path = statNamesPath();
+        try {
+            if (!Files.exists(path)) {
+                Files.createDirectories(path.getParent());
+                Files.writeString(path, GSON.toJson(DEFAULT_STAT_NAMES));
+                customStatNames = DEFAULT_STAT_NAMES;
+                lastLoadedModified = -1L;
+                return;
+            }
+            long modified = Files.getLastModifiedTime(path).toMillis();
+            if (modified == lastLoadedModified) {
+                return;
+            }
+            String content = Files.readString(path);
+            JsonObject obj = JsonParser.parseString(content).getAsJsonObject();
+            Map<String, String> map = new LinkedHashMap<>();
+            for (Map.Entry<String, com.google.gson.JsonElement> e : obj.entrySet()) {
+                if (e.getValue().isJsonPrimitive()) {
+                    map.put(e.getKey(), e.getValue().getAsString());
+                }
+            }
+            customStatNames = map;
+            lastLoadedModified = modified;
+        } catch (Exception e) {
+            ServerLeaderboardMod.LOGGER.warn("[排行榜] 读取 stat_names.json 失败，使用内置默认表: {}", e.toString());
+            customStatNames = DEFAULT_STAT_NAMES;
+            lastLoadedModified = -1L;
+        }
+    }
+
+    /** 当前生效的 custom 统计名表（只读视图） */
+    public static Map<String, String> customStatNames() {
+        return customStatNames;
     }
 
     /** minecraft:diamond_ore -> Diamond Ore */
@@ -147,7 +208,8 @@ public final class StatFormat {
     }
 
     public static String statDisplayName(String statId) {
-        return CUSTOM_STAT_NAMES.getOrDefault(statId, prettifyId(statId));
+        loadStatNamesIfChanged();
+        return customStatNames.getOrDefault(statId, prettifyId(statId));
     }
 
     /** 按统计类型格式化数值（与 Python format_value 一致） */
