@@ -31,6 +31,7 @@ public class ServerLeaderboardMod implements DedicatedServerModInitializer {
             LeaderboardConfig.load();
             PlayerFilter.load();
             SidebarScoreboards.load();
+            SidebarScoreboards.startWatcher(server);
             CustomDisplay.loadIfChanged();
             Lang.reloadIfChanged();
             StatFormat.loadStatNamesIfChanged();

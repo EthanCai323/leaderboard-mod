@@ -18,6 +18,7 @@ import net.minecraft.util.WorldSavePath;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Locale;
@@ -27,6 +28,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -44,15 +46,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class SidebarScoreboards {
     private static final String OBJECTIVE_NAME = "lb_sidebar";
     private static final String TITLE = "我的数据";
-    /** scoreboard.json 外部变更检测周期（tick），5 秒 */
-    private static final long FILE_CHECK_INTERVAL = 100L;
+    /** scoreboard.json 外部变更检测周期（毫秒），5 秒 */
+    private static final long WATCH_INTERVAL_MS = 5000L;
 
-    private static final Set<String> enabled = new LinkedHashSet<>();
+    /** watcher 线程与主线程都会访问，需线程安全 */
+    private static final Set<String> enabled = Collections.synchronizedSet(new LinkedHashSet<>());
     private static final Map<UUID, PlayerBoard> boards = new HashMap<>();
     /** 最近一次向玩家推送的数据版本号，-1 表示从未推送 */
     private static long lastPushedVersion = -1L;
     /** scoreboard.json 已知的最后修改时间，-1 表示文件不存在，Long.MIN_VALUE 表示未初始化 */
-    private static long fileModified = Long.MIN_VALUE;
+    private static volatile long fileModified = Long.MIN_VALUE;
     private static long tickCounter = 0;
 
     /** 间隔驱动刷新：后台读取 stats JSON 的单线程执行器 */
@@ -63,6 +66,13 @@ public final class SidebarScoreboards {
     });
     /** 上一次 stats 读取未完成时跳过本次，避免重复读 */
     private static final AtomicBoolean READING = new AtomicBoolean(false);
+
+    /**
+     * scoreboard.json 外部编辑监视线程。必须独立于服务器 tick：
+     * 1.21 起服务器空置 60 秒会自动暂停（pause-when-empty），暂停期间 tick 停止，
+     * 挂在 tick 上的检测会完全失效。
+     */
+    private static ScheduledExecutorService watcher;
 
     private record PlayerBoard(Scoreboard board, ScoreboardObjective objective) {
     }
@@ -79,17 +89,22 @@ public final class SidebarScoreboards {
     // ---------- 持久化 ----------
 
     public static void load() {
-        enabled.clear();
         Path path = path();
         if (!Files.exists(path)) {
             fileModified = -1L;
+            synchronized (enabled) {
+                enabled.clear();
+            }
             save();
             return;
         }
         try {
             JsonArray arr = JsonParser.parseString(Files.readString(path)).getAsJsonArray();
-            for (int i = 0; i < arr.size(); i++) {
-                enabled.add(arr.get(i).getAsString().toLowerCase(Locale.ROOT));
+            synchronized (enabled) {
+                enabled.clear();
+                for (int i = 0; i < arr.size(); i++) {
+                    enabled.add(arr.get(i).getAsString().toLowerCase(Locale.ROOT));
+                }
             }
             fileModified = Files.getLastModifiedTime(path).toMillis();
         } catch (Exception e) {
@@ -101,8 +116,10 @@ public final class SidebarScoreboards {
         try {
             Files.createDirectories(path().getParent());
             JsonArray arr = new JsonArray();
-            for (String name : enabled) {
-                arr.add(name);
+            synchronized (enabled) {
+                for (String name : enabled) {
+                    arr.add(name);
+                }
             }
             Files.writeString(path(), arr.toString());
             // 自己写入导致的 mtime 变化不应触发外部变更重载
@@ -125,8 +142,34 @@ public final class SidebarScoreboards {
         }
     }
 
-    /** 服务器停止时关闭后台读取线程 */
+    /**
+     * 服务器启动完成后开启 scoreboard.json 监视线程（每 5 秒检测一次 mtime）。
+     * 独立线程不随服务器暂停而停摆，空服时的外部编辑也能检出。
+     */
+    public static void startWatcher(MinecraftServer server) {
+        watcher = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "server-leaderboard-scoreboard-watcher");
+            t.setDaemon(true);
+            return t;
+        });
+        watcher.scheduleWithFixedDelay(() -> checkExternalEdit(server),
+                WATCH_INTERVAL_MS, WATCH_INTERVAL_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /** 服务器停止时关闭后台线程 */
     public static void shutdown() {
+        if (watcher != null) {
+            watcher.shutdown();
+            try {
+                if (!watcher.awaitTermination(5, TimeUnit.SECONDS)) {
+                    watcher.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                watcher.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            watcher = null;
+        }
         READER.shutdown();
         try {
             if (!READER.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -241,15 +284,13 @@ public final class SidebarScoreboards {
 
     /**
      * 每 tick 调用：
-     * 1. 低频检测 scoreboard.json 是否被手动编辑，变了就重载并与在线玩家对齐；
-     * 2. 排行榜数据版本号变化时重发所有已开启的计分板；
-     * 3. scoreboardRefreshIntervalTicks 大于 0 时按间隔触发实时刷新。
+     * 1. 排行榜数据版本号变化时重发所有已开启的计分板；
+     * 2. scoreboardRefreshIntervalTicks 大于 0 时按间隔触发实时刷新。
+     * 注意：scoreboard.json 外部编辑检测不在这里，由独立 watcher 线程负责
+     * （服务器空置暂停时 tick 停发，挂在这里会检测不到）。
      */
     public static void tick(MinecraftServer server) {
         tickCounter++;
-        if (tickCounter % FILE_CHECK_INTERVAL == 0) {
-            checkExternalEdit(server);
-        }
         if (boards.isEmpty()) {
             return;
         }
@@ -268,17 +309,24 @@ public final class SidebarScoreboards {
         }
     }
 
-    /** 检测 scoreboard.json 外部编辑：mtime 变化才重新加载并对齐在线玩家 */
+    /**
+     * watcher 线程每 5 秒调用：scoreboard.json 的 mtime 变化就重新加载，
+     * 立即打日志，再把计分板对齐任务投回主线程执行
+     * （暂停时主线程任务排队，玩家上线唤醒后执行；无人在线时 reconcile 本就是空操作）。
+     */
     private static void checkExternalEdit(MinecraftServer server) {
         try {
             Path path = path();
             long current = Files.exists(path) ? Files.getLastModifiedTime(path).toMillis() : -1L;
-            if (fileModified != Long.MIN_VALUE && current != fileModified) {
-                load();
-                reconcile(server);
-                ServerLeaderboardMod.LOGGER.info("[排行榜] 检测到 scoreboard.json 变更，已重新加载");
-            } else if (fileModified == Long.MIN_VALUE) {
+            if (fileModified == Long.MIN_VALUE) {
+                // 首次仅建立基线，启动时的 load() 已读取过内容
                 fileModified = current;
+                return;
+            }
+            if (current != fileModified) {
+                load();
+                ServerLeaderboardMod.LOGGER.info("[排行榜] 检测到 scoreboard.json 变更，已重新加载");
+                server.execute(() -> reconcile(server));
             }
         } catch (Exception ignored) {
             // 读取 mtime 失败时跳过本次检测
