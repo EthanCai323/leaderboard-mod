@@ -39,6 +39,7 @@ Minecraft 1.21.7 Fabric 服务端模组：自动统计玩家数据并生成排�
 | `/leaderboard screen remove prefix\|suffix <特征>` | OP | 按类型移除名称筛除特征 |
 | `/leaderboard screen list` | OP | 查看当前名称筛除特征 |
 | `/leaderboard allowscoreboard [true\|false]` | OP | 设置是否允许普通玩家开启侧边计分板；无参数时查看当前状态 |
+| `/leaderboard reload` | OP | 重新加载全部配置文件并后台重新生成排行榜 |
 | `/leaderboard scoreboard on\|off` | 所有人 | 开关个人侧边计分板 |
 | `/leaderboard help` | 所有人 | 显示指令帮助（OP 追加显示管理指令） |
 

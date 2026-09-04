@@ -63,6 +63,9 @@ public class ServerLeaderboardMod implements DedicatedServerModInitializer {
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
                 SidebarScoreboards.onDisconnect(handler.player));
 
+        // 服务器停止时优雅关闭后台生成线程，避免输出文件写一半
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> LeaderboardGenerator.shutdown());
+
         LeaderboardCommands.register();
     }
 

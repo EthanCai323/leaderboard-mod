@@ -26,10 +26,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -49,6 +52,8 @@ public final class LeaderboardGenerator {
         return t;
     });
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
+    /** 数据版本号：每次成功生成新数据后递增，供计分板等消费方判断是否需要重发 */
+    private static final AtomicLong DATA_VERSION = new AtomicLong(0);
 
     private static volatile LeaderboardData lastData;
     private static volatile String lastUpdated;
@@ -75,6 +80,28 @@ public final class LeaderboardGenerator {
     /** 是否正在后台生成 */
     public static boolean isRunning() {
         return RUNNING.get();
+    }
+
+    /** 数据版本号：每次成功生成递增，初始为 0 */
+    public static long getDataVersion() {
+        return DATA_VERSION.get();
+    }
+
+    /**
+     * 服务器停止时优雅关闭后台线程：先等待进行中的生成完成（最多 5 秒），
+     * 超时或被中断则强制中断，避免输出文件写一半。
+     */
+    public static void shutdown() {
+        EXECUTOR.shutdown();
+        try {
+            if (!EXECUTOR.awaitTermination(5, TimeUnit.SECONDS)) {
+                ServerLeaderboardMod.LOGGER.warn("[排行榜] 后台生成未在 5 秒内完成，强制中断");
+                EXECUTOR.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            EXECUTOR.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -208,6 +235,18 @@ public final class LeaderboardGenerator {
         }
         lastData = data;
         lastUpdated = result.updated();
+        DATA_VERSION.incrementAndGet();
+        // 把新生成中出现的统计项追加进 custom_display.txt（默认 true），保证旧配置文件可控所有项
+        Set<String> statIds = new TreeSet<>();
+        for (LeaderboardData.CustomLeader leader : data.getLeadersCustom()) {
+            statIds.add(leader.stat());
+        }
+        for (List<LeaderboardData.ItemRow> rows : data.getLeadersItems().values()) {
+            for (LeaderboardData.ItemRow row : rows) {
+                statIds.add(row.stat());
+            }
+        }
+        CustomDisplay.appendMissing(statIds);
         try {
             // --- 输出到服务器运行目录 ---
             Path gameDir = FabricLoader.getInstance().getGameDir();

@@ -30,13 +30,18 @@ final class PlayerHeads {
     }
 
     private static ProfileComponent resolve(MinecraftServer server, String name) {
-        try {
-            if (server != null) {
+        if (server != null) {
+            // 每一步独立防御：任何 API 变动或实现缺失都安全降级到仅名字
+            try {
                 // 在线玩家的 GameProfile 自带纹理属性，皮肤可直接显示
                 ServerPlayerEntity online = server.getPlayerManager().getPlayer(name);
                 if (online != null) {
                     return ProfileComponent.ofStatic(online.getGameProfile());
                 }
+            } catch (Exception | NoClassDefFoundError | NoSuchMethodError ignored) {
+                // 继续尝试 NameToIdCache
+            }
+            try {
                 // NameToIdCache 提供 UUID（一般无纹理），客户端可凭 UUID 异步补全皮肤
                 NameToIdCache cache = server.getApiServices().nameToIdCache();
                 if (cache != null) {
@@ -46,9 +51,9 @@ final class PlayerHeads {
                                 new GameProfile(cached.get().id(), cached.get().name()));
                     }
                 }
+            } catch (Exception | NoClassDefFoundError | NoSuchMethodError ignored) {
+                // 退化为仅名字
             }
-        } catch (Exception ignored) {
-            // 任何异常都退化为仅名字
         }
         return ProfileComponent.ofDynamic(name);
     }

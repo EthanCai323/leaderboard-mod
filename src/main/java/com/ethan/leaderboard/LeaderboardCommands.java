@@ -36,8 +36,11 @@ import static net.minecraft.server.command.CommandManager.literal;
  * /leaderboard screen remove prefix/suffix <> 按类型移除名称筛除特征（仅 OP）
  * /leaderboard screen list                    查看名称筛除特征（仅 OP）
  * /leaderboard allowscoreboard [true/false]   查看或设置普通玩家计分板权限（仅 OP）
+ * /leaderboard reload                         重新加载全部配置并后台重新生成（仅 OP）
  * /leaderboard scoreboard on|off              个人侧边计分板（任何玩家）
  * /leaderboard help                           指令帮助（任何玩家；OP 追加显示管理指令）
+ *
+ * 管理子树在注册时通过 requires 做权限检查，非 OP 玩家不可见也无法补全。
  */
 public final class LeaderboardCommands {
     private static final Pattern INTERVAL_PATTERN = Pattern.compile("^(\\d+)(t|s|m|h)?$");
@@ -51,6 +54,7 @@ public final class LeaderboardCommands {
                 dispatcher.register(literal("leaderboard")
                         .executes(ctx -> openLeaderboard(ctx.getSource()))
                         .then(literal("refresh")
+                                .requires(LeaderboardCommands::isOp)
                                 .executes(ctx -> refresh(ctx.getSource()))
                                 .then(literal("interval")
                                         .executes(ctx -> showInterval(ctx.getSource()))
@@ -63,12 +67,14 @@ public final class LeaderboardCommands {
                                                 .executes(ctx -> setBroadcast(ctx.getSource(),
                                                         BoolArgumentType.getBool(ctx, "enabled"))))))
                         .then(literal("mode")
+                                .requires(LeaderboardCommands::isOp)
                                 .executes(ctx -> showMode(ctx.getSource()))
                                 .then(argument("mode", StringArgumentType.word())
                                         .suggests((ctx, builder) -> CommandSource.suggestMatching(MODES, builder))
                                         .executes(ctx -> setMode(ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "mode")))))
                         .then(literal("player")
+                                .requires(LeaderboardCommands::isOp)
                                 .then(literal("list")
                                         .executes(ctx -> playerList(ctx.getSource(), false))
                                         .then(literal("all")
@@ -76,22 +82,31 @@ public final class LeaderboardCommands {
                                 .then(literal("whitelist")
                                         .then(literal("add")
                                                 .then(argument("name", StringArgumentType.word())
+                                                        .suggests((ctx, builder) -> CommandSource.suggestMatching(
+                                                                ctx.getSource().getPlayerNames(), builder))
                                                         .executes(ctx -> whitelistAdd(ctx.getSource(),
                                                                 StringArgumentType.getString(ctx, "name")))))
                                         .then(literal("remove")
                                                 .then(argument("name", StringArgumentType.word())
+                                                        .suggests((ctx, builder) -> CommandSource.suggestMatching(
+                                                                ctx.getSource().getPlayerNames(), builder))
                                                         .executes(ctx -> whitelistRemove(ctx.getSource(),
                                                                 StringArgumentType.getString(ctx, "name"))))))
                                 .then(literal("blacklist")
                                         .then(literal("add")
                                                 .then(argument("name", StringArgumentType.word())
+                                                        .suggests((ctx, builder) -> CommandSource.suggestMatching(
+                                                                ctx.getSource().getPlayerNames(), builder))
                                                         .executes(ctx -> blacklistAdd(ctx.getSource(),
                                                                 StringArgumentType.getString(ctx, "name")))))
                                         .then(literal("remove")
                                                 .then(argument("name", StringArgumentType.word())
+                                                        .suggests((ctx, builder) -> CommandSource.suggestMatching(
+                                                                ctx.getSource().getPlayerNames(), builder))
                                                         .executes(ctx -> blacklistRemove(ctx.getSource(),
                                                                 StringArgumentType.getString(ctx, "name")))))))
                         .then(literal("screen")
+                                .requires(LeaderboardCommands::isOp)
                                 .then(literal("add")
                                         .then(literal("prefix")
                                                 .then(argument("value", StringArgumentType.word())
@@ -104,19 +119,27 @@ public final class LeaderboardCommands {
                                 .then(literal("remove")
                                         .then(literal("prefix")
                                                 .then(argument("value", StringArgumentType.word())
+                                                        .suggests((ctx, builder) -> CommandSource.suggestMatching(
+                                                                LeaderboardConfig.get().screenPrefixes, builder))
                                                         .executes(ctx -> screenRemove(ctx.getSource(), true,
                                                                 StringArgumentType.getString(ctx, "value")))))
                                         .then(literal("suffix")
                                                 .then(argument("value", StringArgumentType.word())
+                                                        .suggests((ctx, builder) -> CommandSource.suggestMatching(
+                                                                LeaderboardConfig.get().screenSuffixes, builder))
                                                         .executes(ctx -> screenRemove(ctx.getSource(), false,
                                                                 StringArgumentType.getString(ctx, "value"))))))
                                 .then(literal("list")
                                         .executes(ctx -> screenList(ctx.getSource()))))
                         .then(literal("allowscoreboard")
+                                .requires(LeaderboardCommands::isOp)
                                 .executes(ctx -> showAllowScoreboard(ctx.getSource()))
                                 .then(argument("enabled", BoolArgumentType.bool())
                                         .executes(ctx -> setAllowScoreboard(ctx.getSource(),
                                                 BoolArgumentType.getBool(ctx, "enabled")))))
+                        .then(literal("reload")
+                                .requires(LeaderboardCommands::isOp)
+                                .executes(ctx -> reloadConfigs(ctx.getSource())))
                         .then(literal("help").executes(ctx -> help(ctx.getSource())))
                         .then(literal("scoreboard")
                                 .then(literal("on")
@@ -125,13 +148,22 @@ public final class LeaderboardCommands {
                                         .executes(ctx -> scoreboard(ctx.getSource(), false))))));
     }
 
-    /** OP 检查：非 OP 提示红色错误 */
-    private static boolean notOp(ServerCommandSource src) {
-        if (src.getPermissions().hasPermission(new Permission.Level(PermissionLevel.fromLevel(2)))) {
-            return false;
-        }
-        src.sendMessage(Text.literal("仅 OP 可用此指令").formatted(Formatting.RED));
-        return true;
+    /** 重新加载全部配置文件并触发一次后台重新生成 */
+    private static int reloadConfigs(ServerCommandSource src) {
+        LeaderboardConfig.load();
+        PlayerFilter.load();
+        StatFormat.loadStatNamesIfChanged();
+        CustomDisplay.loadIfChanged();
+        Lang.reloadIfChanged();
+        SidebarScoreboards.load();
+        LeaderboardGenerator.requestGenerate(src.getServer(), null);
+        src.sendMessage(Text.literal("配置已重新加载").formatted(Formatting.GREEN));
+        return 1;
+    }
+
+    /** OP 判定：注册时作为管理子树的 requires 使用 */
+    private static boolean isOp(ServerCommandSource src) {
+        return src.getPermissions().hasPermission(new Permission.Level(PermissionLevel.fromLevel(2)));
     }
 
     /**
@@ -187,9 +219,6 @@ public final class LeaderboardCommands {
     // ---------- refresh ----------
 
     private static int refresh(ServerCommandSource src) {
-        if (notOp(src)) {
-            return 0;
-        }
         boolean started = LeaderboardGenerator.requestGenerate(src.getServer(), ok -> {
             if (ok) {
                 LeaderboardData data = LeaderboardGenerator.getLastData();
@@ -212,9 +241,6 @@ public final class LeaderboardCommands {
 
     /** 无参数：显示当前自动刷新间隔 */
     private static int showInterval(ServerCommandSource src) {
-        if (notOp(src)) {
-            return 0;
-        }
         long ticks = LeaderboardConfig.get().refreshIntervalTicks;
         if (ticks <= 0) {
             src.sendMessage(Text.literal("当前已关闭自动刷新").formatted(Formatting.GRAY));
@@ -226,9 +252,6 @@ public final class LeaderboardCommands {
     }
 
     private static int setInterval(ServerCommandSource src, String arg) {
-        if (notOp(src)) {
-            return 0;
-        }
         Matcher matcher = INTERVAL_PATTERN.matcher(arg);
         if (!matcher.matches()) {
             src.sendMessage(Text.literal("用法：/leaderboard refresh interval <数字>[t|s|m|h]")
@@ -274,9 +297,6 @@ public final class LeaderboardCommands {
 
     /** 无参数：显示当前自动刷新广播开关 */
     private static int showBroadcast(ServerCommandSource src) {
-        if (notOp(src)) {
-            return 0;
-        }
         src.sendMessage(Text.literal("当前自动刷新广播："
                 + (LeaderboardConfig.get().broadcastRefresh ? "开启" : "关闭"))
                 .formatted(Formatting.GRAY));
@@ -284,9 +304,6 @@ public final class LeaderboardCommands {
     }
 
     private static int setBroadcast(ServerCommandSource src, boolean enabled) {
-        if (notOp(src)) {
-            return 0;
-        }
         LeaderboardConfig.get().broadcastRefresh = enabled;
         LeaderboardConfig.save();
         src.sendMessage(Text.literal(enabled ? "已开启自动刷新广播" : "已关闭自动刷新广播")
@@ -298,9 +315,6 @@ public final class LeaderboardCommands {
 
     /** 无参数：显示当前显示模式 */
     private static int showMode(ServerCommandSource src) {
-        if (notOp(src)) {
-            return 0;
-        }
         src.sendMessage(Text.literal("当前显示模式：" + modeLabel(LeaderboardConfig.get().displayMode)
                 + "模式").formatted(Formatting.GRAY));
         return 1;
@@ -316,9 +330,6 @@ public final class LeaderboardCommands {
     }
 
     private static int setMode(ServerCommandSource src, String mode) {
-        if (notOp(src)) {
-            return 0;
-        }
         if (!LeaderboardConfig.isValidMode(mode)) {
             src.sendMessage(Text.literal("用法：/leaderboard mode <compact|normal|full|custom>")
                     .formatted(Formatting.RED));
@@ -351,9 +362,6 @@ public final class LeaderboardCommands {
     // ---------- player ----------
 
     private static int playerList(ServerCommandSource src, boolean all) {
-        if (notOp(src)) {
-            return 0;
-        }
         if (all) {
             Map<String, Boolean> allPlayers = LeaderboardGenerator.getLastAllPlayers();
             if (allPlayers.isEmpty()) {
@@ -386,9 +394,6 @@ public final class LeaderboardCommands {
     }
 
     private static int whitelistAdd(ServerCommandSource src, String name) {
-        if (notOp(src)) {
-            return 0;
-        }
         int result = PlayerFilter.whitelistAdd(name);
         switch (result) {
             case PlayerFilter.ADD_MOVED_FROM_OTHER ->
@@ -405,9 +410,6 @@ public final class LeaderboardCommands {
     }
 
     private static int whitelistRemove(ServerCommandSource src, String name) {
-        if (notOp(src)) {
-            return 0;
-        }
         if (PlayerFilter.whitelistRemove(name) == PlayerFilter.REMOVE_NOT_FOUND) {
             src.sendMessage(Text.literal(name + "不在白名单中").formatted(Formatting.RED));
             return 0;
@@ -418,9 +420,6 @@ public final class LeaderboardCommands {
     }
 
     private static int blacklistAdd(ServerCommandSource src, String name) {
-        if (notOp(src)) {
-            return 0;
-        }
         int result = PlayerFilter.blacklistAdd(name);
         switch (result) {
             case PlayerFilter.ADD_MOVED_FROM_OTHER ->
@@ -437,9 +436,6 @@ public final class LeaderboardCommands {
     }
 
     private static int blacklistRemove(ServerCommandSource src, String name) {
-        if (notOp(src)) {
-            return 0;
-        }
         if (PlayerFilter.blacklistRemove(name) == PlayerFilter.REMOVE_NOT_FOUND) {
             src.sendMessage(Text.literal(name + "不在黑名单中").formatted(Formatting.RED));
             return 0;
@@ -452,9 +448,6 @@ public final class LeaderboardCommands {
     // ---------- screen ----------
 
     private static int screenAdd(ServerCommandSource src, boolean prefix, String value) {
-        if (notOp(src)) {
-            return 0;
-        }
         List<String> list = prefix
                 ? LeaderboardConfig.get().screenPrefixes
                 : LeaderboardConfig.get().screenSuffixes;
@@ -475,9 +468,6 @@ public final class LeaderboardCommands {
 
     /** 按类型移除筛除特征：prefix=true 从前缀表移除，false 从后缀表移除 */
     private static int screenRemove(ServerCommandSource src, boolean prefix, String value) {
-        if (notOp(src)) {
-            return 0;
-        }
         String kind = prefix ? "前缀" : "后缀";
         List<String> list = prefix
                 ? LeaderboardConfig.get().screenPrefixes
@@ -495,9 +485,6 @@ public final class LeaderboardCommands {
     }
 
     private static int screenList(ServerCommandSource src) {
-        if (notOp(src)) {
-            return 0;
-        }
         LeaderboardConfig config = LeaderboardConfig.get();
         src.sendMessage(Text.literal("—— 名称筛除特征 ——").formatted(Formatting.GOLD));
         src.sendMessage(Text.literal("前缀：" + (config.screenPrefixes.isEmpty()
@@ -513,9 +500,6 @@ public final class LeaderboardCommands {
 
     /** 无参数：显示当前是否允许普通玩家开启侧边计分板 */
     private static int showAllowScoreboard(ServerCommandSource src) {
-        if (notOp(src)) {
-            return 0;
-        }
         src.sendMessage(Text.literal(LeaderboardConfig.get().allowScoreboard
                         ? "当前已允许普通玩家开启侧边计分板" : "当前已禁止普通玩家开启侧边计分板")
                 .formatted(Formatting.GRAY));
@@ -523,9 +507,6 @@ public final class LeaderboardCommands {
     }
 
     private static int setAllowScoreboard(ServerCommandSource src, boolean enabled) {
-        if (notOp(src)) {
-            return 0;
-        }
         LeaderboardConfig.get().allowScoreboard = enabled;
         LeaderboardConfig.save();
         if (enabled) {
@@ -587,6 +568,8 @@ public final class LeaderboardCommands {
             src.sendMessage(Text.literal("/leaderboard screen list - 查看名称筛除特征")
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard allowscoreboard [true|false] - 查看或设置普通玩家计分板权限")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard reload - 重新加载配置并重新生成排行榜")
                     .formatted(Formatting.GRAY));
         }
         return 1;

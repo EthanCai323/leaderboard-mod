@@ -30,7 +30,8 @@ import java.util.UUID;
  * 个人侧边计分板：每个开启的玩家持有独立的 Scoreboard 实例，
  * 通过计分板数据包下发，各人只看得到自己的数据。
  * 数据源为最近一次排行榜生成时从 stats JSON 求和得到的玩家总览，
- * 每 20 tick 刷新一次（数据本身随排行榜刷新而更新）。
+ * 按 LeaderboardGenerator 的数据版本号驱动：版本变化才重建并重发，
+ * 玩家刚开启时立即显示一次当前数据。
  * 开启状态持久化到 leaderboard/scoreboard.json。
  * OP 可通过 /leaderboard allowscoreboard false 禁止普通玩家开启。
  */
@@ -40,7 +41,8 @@ public final class SidebarScoreboards {
 
     private static final Set<String> enabled = new LinkedHashSet<>();
     private static final Map<UUID, PlayerBoard> boards = new HashMap<>();
-    private static long tickCounter = 0;
+    /** 最近一次向玩家推送的数据版本号，-1 表示从未推送 */
+    private static long lastPushedVersion = -1L;
 
     private record PlayerBoard(Scoreboard board, ScoreboardObjective objective) {
     }
@@ -180,13 +182,18 @@ public final class SidebarScoreboards {
         }
     }
 
-    // ---------- 定时刷新 ----------
+    // ---------- 按需刷新 ----------
 
+    /** 每 tick 调用：数据版本号变化时才重建并重发所有已开启的计分板 */
     public static void tick(MinecraftServer server) {
-        tickCounter++;
-        if (tickCounter % 20 != 0 || boards.isEmpty()) {
+        if (boards.isEmpty()) {
             return;
         }
+        long version = LeaderboardGenerator.getDataVersion();
+        if (version == lastPushedVersion) {
+            return;
+        }
+        lastPushedVersion = version;
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             if (boards.containsKey(player.getUuid())) {
                 update(player);
