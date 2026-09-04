@@ -4,6 +4,8 @@ import net.fabricmc.loader.api.FabricLoader;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -65,6 +67,41 @@ public final class CustomDisplay {
 
     public static boolean isShown(String statId) {
         return entries.getOrDefault(statId, true);
+    }
+
+    /**
+     * 排行榜生成后调用：把文件中尚未记录的新统计项追加到 custom_display.txt 末尾，默认 true。
+     * 文件不存在时不创建（首次切到自定义模式才由 writeDefaults 生成完整默认文件）。
+     */
+    public static synchronized void appendMissing(Collection<String> statIds) {
+        if (!fileExists()) {
+            return;
+        }
+        try {
+            List<String> missing = new ArrayList<>();
+            for (String id : new TreeSet<>(statIds)) {
+                if (!entries.containsKey(id)) {
+                    missing.add(id);
+                }
+            }
+            if (missing.isEmpty()) {
+                return;
+            }
+            StringBuilder sb = new StringBuilder();
+            for (String id : missing) {
+                sb.append(id).append(" true\n");
+            }
+            Files.writeString(path(), sb.toString(), StandardOpenOption.APPEND);
+            Map<String, Boolean> map = new HashMap<>(entries);
+            for (String id : missing) {
+                map.put(id, true);
+            }
+            entries = map;
+            lastModified = Files.getLastModifiedTime(path()).toMillis();
+            ServerLeaderboardMod.LOGGER.info("[排行榜] custom_display.txt 已追加 {} 个新统计项", missing.size());
+        } catch (Exception e) {
+            ServerLeaderboardMod.LOGGER.warn("[排行榜] 追加 custom_display.txt 失败: {}", e.toString());
+        }
     }
 
     /** 首次切换到 custom 模式时写入全部已知条目的默认 true 版本 */
