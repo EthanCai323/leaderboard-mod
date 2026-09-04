@@ -7,12 +7,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.ToLongFunction;
 
 /**
  * 排行计算，移植自 leaderboard.py 的 compute()。
  * allStats: 玩家名 -> 分类 -> 统计项 -> 数值
+ * 综合得分只统计当前显示模式实际展示的分类/统计项：
+ * 精简模式只算玩家总览的 9 项核心数据；普通模式算全部通用统计与
+ * 物品/生物各分类前 36 项；全部模式算所有项；自定义模式算 custom_display.txt 开启的项。
  */
 public final class LeaderboardCompute {
+
+    /** 与普通模式 GUI 明细上限一致（LeaderboardScreenHandler.NORMAL_MODE_DETAIL_LIMIT） */
+    private static final int NORMAL_MODE_ITEM_LIMIT = 36;
 
     private LeaderboardCompute() {
     }
@@ -87,21 +94,9 @@ public final class LeaderboardCompute {
             leadersItems.put(cat, rows);
         }
 
-        // --- 综合评分 ---
-        Map<String, Integer> score = new HashMap<>();
-        Map<String, Integer> titles = new HashMap<>();
-        for (String n : players) {
-            score.put(n, 0);
-            titles.put(n, 0);
-        }
-
-        for (LeaderboardData.CustomLeader leader : leadersCustom) {
-            award(leader.ranking(), score, titles);
-        }
-
+        // --- 各玩家分类总量（供玩家总览与精简模式评分） ---
         Map<String, Map<String, Long>> categoryTotals = new HashMap<>();
         for (String cat : StatFormat.CATEGORY_NAMES.keySet()) {
-            List<LeaderboardData.Entry> ranking = new ArrayList<>();
             for (String n : players) {
                 long total = 0;
                 Map<String, Long> m = allStats.getOrDefault(n, Map.of()).get(cat);
@@ -111,13 +106,6 @@ public final class LeaderboardCompute {
                     }
                 }
                 categoryTotals.computeIfAbsent(n, k -> new HashMap<>()).put(cat, total);
-                if (total > 0) {
-                    ranking.add(new LeaderboardData.Entry(n, total));
-                }
-            }
-            ranking.sort((a, b) -> Long.compare(b.value(), a.value()));
-            if (!ranking.isEmpty()) {
-                award(ranking, score, titles);
             }
         }
 
@@ -144,6 +132,52 @@ public final class LeaderboardCompute {
                     c.getOrDefault("minecraft:aviate_one_cm", 0L)));
         }
 
+        // --- 综合评分：只统计当前显示模式实际展示的分类/统计项 ---
+        Map<String, Integer> score = new HashMap<>();
+        Map<String, Integer> titles = new HashMap<>();
+        for (String n : players) {
+            score.put(n, 0);
+            titles.put(n, 0);
+        }
+
+        String mode = LeaderboardConfig.get().displayMode;
+        if (LeaderboardConfig.MODE_COMPACT.equals(mode)) {
+            // 精简模式：只算玩家头颅 lore 中的 9 项核心数据
+            awardSummary(players, playerSummary, LeaderboardData.PlayerSummary::playTime, score, titles);
+            awardSummary(players, playerSummary, LeaderboardData.PlayerSummary::deaths, score, titles);
+            awardSummary(players, playerSummary, LeaderboardData.PlayerSummary::mobKills, score, titles);
+            awardSummary(players, playerSummary, LeaderboardData.PlayerSummary::damageDealt, score, titles);
+            awardSummary(players, playerSummary, LeaderboardData.PlayerSummary::damageTaken, score, titles);
+            awardSummary(players, playerSummary, LeaderboardData.PlayerSummary::distance, score, titles);
+            awardSummary(players, playerSummary, LeaderboardData.PlayerSummary::minedTotal, score, titles);
+            awardSummary(players, playerSummary, LeaderboardData.PlayerSummary::craftedTotal, score, titles);
+            awardSummary(players, playerSummary, LeaderboardData.PlayerSummary::aviate, score, titles);
+        } else {
+            boolean custom = LeaderboardConfig.MODE_CUSTOM.equals(mode);
+            boolean normal = LeaderboardConfig.MODE_NORMAL.equals(mode);
+            // 通用榜：自定义模式只算 custom_display.txt 开启的统计项
+            for (LeaderboardData.CustomLeader leader : leadersCustom) {
+                if (custom && !CustomDisplay.isShown(leader.stat())) {
+                    continue;
+                }
+                award(leader.ranking(), score, titles);
+            }
+            // 物品/生物榜：普通模式每类只算前 36 项，自定义模式只算开启的项
+            for (List<LeaderboardData.ItemRow> rows : leadersItems.values()) {
+                int awarded = 0;
+                for (LeaderboardData.ItemRow row : rows) {
+                    if (custom && !CustomDisplay.isShown(row.stat())) {
+                        continue;
+                    }
+                    if (normal && awarded >= NORMAL_MODE_ITEM_LIMIT) {
+                        break;
+                    }
+                    award(row.ranking(), score, titles);
+                    awarded++;
+                }
+            }
+        }
+
         List<String> overall = new ArrayList<>(players);
         overall.sort((a, b) -> {
             int cmp = Integer.compare(score.get(b), score.get(a));
@@ -158,6 +192,28 @@ public final class LeaderboardCompute {
         });
 
         return new LeaderboardData(leadersCustom, leadersItems, overall, score, titles, playerSummary);
+    }
+
+    /** 精简模式评分：按玩家总览中的某一项核心数据排名给分 */
+    private static void awardSummary(List<String> players,
+                                     Map<String, LeaderboardData.PlayerSummary> summary,
+                                     ToLongFunction<LeaderboardData.PlayerSummary> metric,
+                                     Map<String, Integer> score, Map<String, Integer> titles) {
+        List<LeaderboardData.Entry> ranking = new ArrayList<>();
+        for (String n : players) {
+            LeaderboardData.PlayerSummary ps = summary.get(n);
+            if (ps == null) {
+                continue;
+            }
+            long v = metric.applyAsLong(ps);
+            if (v > 0) {
+                ranking.add(new LeaderboardData.Entry(n, v));
+            }
+        }
+        ranking.sort((a, b) -> Long.compare(b.value(), a.value()));
+        if (!ranking.isEmpty()) {
+            award(ranking, score, titles);
+        }
     }
 
     /** 按名次给分：第 1 名 N 分，第 2 名 N-1 分……并列同名次；并列第一都算冠军 */
