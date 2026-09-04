@@ -344,8 +344,8 @@ public final class LeaderboardGenerator {
         }
     }
 
-    /** 解析 stats JSON：分类 -> 统计项 -> 数值 */
-    private static Map<String, Map<String, Long>> parseStats(JsonObject stats) {
+    /** 解析 stats JSON：分类 -> 统计项 -> 数值（包内可见，计分板实时刷新复用） */
+    static Map<String, Map<String, Long>> parseStats(JsonObject stats) {
         Map<String, Map<String, Long>> out = new LinkedHashMap<>();
         for (Map.Entry<String, com.google.gson.JsonElement> catEntry : stats.entrySet()) {
             if (!catEntry.getValue().isJsonObject()) {
