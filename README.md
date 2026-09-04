@@ -12,6 +12,17 @@ Minecraft 1.21.7 Fabric 服务端模组：自动统计玩家数据并生成排�
 - **个人侧边计分板**：玩家可用 `/leaderboard scoreboard on` 开关显示自己的 9 项核心数据，OP 可用 `/leaderboard allowscoreboard false` 全局禁止
 - **可调刷新间隔**：`/leaderboard refresh interval 30s` 支持 t/s/m/h 单位，0 关闭自动刷新；`/leaderboard refresh broadcast false` 可关闭刷新广播
 
+## 假人筛除策略
+
+按优先级从高到低依次判定：
+
+1. **白名单**（最高优先级）：在名单中的玩家永远计入排行榜，无视其他所有规则
+2. **黑名单**：在名单中的玩家永远排除
+3. **名称特征筛除**：名字匹配配置的前缀或后缀即排除，默认前缀 `bot_`，不区分大小写，可用 `/leaderboard screen` 系列指令自定义
+4. **Carpet 假人类检测**：生成排行榜时检查在线玩家的实体类名，含 `FakePlayer` 的自动排除，即使名字不带筛除特征；仅对当时在线的假人生效，白名单可豁免
+
+另有一条兜底规则：名字完全无法解析的 UUID（孤儿统计文件）直接跳过不计入，并在服务端日志中提示清理。
+
 ## 指令
 
 | 指令 | 权限 | 说明 |
