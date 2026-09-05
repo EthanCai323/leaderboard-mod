@@ -40,6 +40,7 @@ import static net.minecraft.server.command.CommandManager.literal;
  * /leaderboard scoreboard refresh interval [] 计分板主动刷新间隔（仅 OP，0 跟随数据更新）
  * /leaderboard history [数量]                 查看或设置历史快照保留数量（仅 OP，0 关闭）
  * /leaderboard reload                         重新加载全部配置并后台重新生成（仅 OP）
+ * /leaderboard lang update                    强制重新下载最新中文翻译表（仅 OP）
  * /leaderboard scoreboard on|off              个人侧边计分板（任何玩家）
  * /leaderboard help                           指令帮助（任何玩家；OP 追加显示管理指令）
  *
@@ -151,6 +152,10 @@ public final class LeaderboardCommands {
                         .then(literal("reload")
                                 .requires(LeaderboardCommands::isOp)
                                 .executes(ctx -> reloadConfigs(ctx.getSource())))
+                        .then(literal("lang")
+                                .requires(LeaderboardCommands::isOp)
+                                .then(literal("update")
+                                        .executes(ctx -> langUpdate(ctx.getSource()))))
                         .then(literal("help").executes(ctx -> help(ctx.getSource())))
                         .then(literal("scoreboard")
                                 .then(literal("on")
@@ -164,6 +169,17 @@ public final class LeaderboardCommands {
                                                 .then(argument("value", StringArgumentType.word())
                                                         .executes(ctx -> setScoreboardInterval(ctx.getSource(),
                                                                 StringArgumentType.getString(ctx, "value")))))))));
+    }
+
+    /** 强制重新下载最新中文翻译表，覆盖现有文件后热加载，结果异步反馈 */
+    private static int langUpdate(ServerCommandSource src) {
+        if (LangDownloader.isRunning()) {
+            src.sendMessage(Text.literal("中文翻译表下载已在进行中").formatted(Formatting.YELLOW));
+            return 0;
+        }
+        src.sendMessage(Text.literal("已开始后台下载中文翻译表").formatted(Formatting.GRAY));
+        LangDownloader.forceUpdate(src.getServer(), src);
+        return 1;
     }
 
     /** 重新加载全部配置文件并触发一次后台重新生成 */
@@ -659,6 +675,8 @@ public final class LeaderboardCommands {
             src.sendMessage(Text.literal("/leaderboard player whitelist [add/remove <玩家名>] - 查看或管理白名单")
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard player blacklist [add/remove <玩家名>] - 查看或管理黑名单")
+                    .formatted(Formatting.GRAY));
+            src.sendMessage(Text.literal("/leaderboard lang update - 强制重新下载最新中文翻译表")
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard screen add prefix|suffix <特征> - 添加名称筛除特征")
                     .formatted(Formatting.GRAY));
