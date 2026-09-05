@@ -213,7 +213,7 @@ public final class LeaderboardGenerator {
             nameToUuid.put(name, uuidStr);
         }
         if (!excluded.isEmpty()) {
-            ServerLeaderboardMod.LOGGER.info("[排行榜] 已排除 {} 个玩家: {}", excluded.size(), String.join(", ", excluded));
+            ServerLeaderboardMod.logRoutine("[排行榜] 已排除 {} 个玩家: {}", excluded.size(), String.join(", ", excluded));
         }
         if (allStats.isEmpty()) {
             return new OffThreadResult(null, allPlayers, orphans, null);
@@ -233,7 +233,7 @@ public final class LeaderboardGenerator {
         reportOrphans(result.orphanUuids());
         LeaderboardData data = result.data();
         if (data == null) {
-            ServerLeaderboardMod.LOGGER.info("[排行榜] 没有可统计的玩家，跳过本次生成");
+            ServerLeaderboardMod.logRoutine("[排行榜] 没有可统计的玩家，跳过本次生成");
             return false;
         }
         lastData = data;
@@ -265,11 +265,9 @@ public final class LeaderboardGenerator {
             }
 
             String top = data.getOverall().get(0);
-            // 广播关闭时控制台也不重复输出刷新结果，错误日志与排除提示不受影响
-            if (LeaderboardConfig.get().broadcastRefresh) {
-                ServerLeaderboardMod.LOGGER.info("[排行榜] 已更新：{} 名玩家，综合第一 {}（{} 分）-> {}",
-                        data.getOverall().size(), top, data.getScore().get(top), htmlPath);
-            }
+            // 例行日志统一走 logRoutine：广播关闭时控制台同样静默，错误日志不受影响
+            ServerLeaderboardMod.logRoutine("[排行榜] 已更新：{} 名玩家，综合第一 {}（{} 分）-> {}",
+                    data.getOverall().size(), top, data.getScore().get(top), htmlPath);
             return true;
         } catch (Exception e) {
             ServerLeaderboardMod.LOGGER.error("[排行榜] 写入输出文件失败", e);
@@ -315,7 +313,7 @@ public final class LeaderboardGenerator {
                 Files.deleteIfExists(files.get(i));
             }
             if (excess > 0) {
-                ServerLeaderboardMod.LOGGER.info("[排行榜] 已清理 {} 个超量历史快照", excess);
+                ServerLeaderboardMod.logRoutine("[排行榜] 已清理 {} 个超量历史快照", excess);
             }
         } catch (Exception e) {
             ServerLeaderboardMod.LOGGER.warn("[排行榜] 清理历史快照失败: {}", e.toString());

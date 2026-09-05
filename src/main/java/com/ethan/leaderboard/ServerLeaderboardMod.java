@@ -79,6 +79,16 @@ public class ServerLeaderboardMod implements DedicatedServerModInitializer {
         nextRunAt = interval > 0 ? tickCounter + interval : Long.MAX_VALUE;
     }
 
+    /**
+     * 每次生成都会出现的例行日志：broadcastRefresh=false 时与聊天广播一并静默。
+     * 错误与警告日志不走这里，始终输出。
+     */
+    public static void logRoutine(String msg, Object... args) {
+        if (LeaderboardConfig.get().broadcastRefresh) {
+            LOGGER.info(msg, args);
+        }
+    }
+
     /** 定时刷新并按配置广播综合第一 */
     public static void runAndBroadcast(MinecraftServer server) {
         boolean started = LeaderboardGenerator.requestGenerate(server, ok -> {
@@ -96,7 +106,7 @@ public class ServerLeaderboardMod implements DedicatedServerModInitializer {
                     false);
         });
         if (!started) {
-            LOGGER.info("[排行榜] 上一次生成尚未完成，跳过本次自动刷新");
+            logRoutine("[排行榜] 上一次生成尚未完成，跳过本次自动刷新");
         }
     }
 }
