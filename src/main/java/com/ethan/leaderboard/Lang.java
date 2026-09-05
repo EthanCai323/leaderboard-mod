@@ -72,7 +72,12 @@ public final class Lang {
         }
     }
 
-    private static Path langPath() {
+    /** 当前已加载的翻译条目数，0 表示未加载或文件缺失 */
+    public static int entryCount() {
+        return table.size();
+    }
+
+    static Path langPath() {
         return FabricLoader.getInstance().getGameDir()
                 .resolve("leaderboard").resolve("lang").resolve("zh_cn.json");
     }

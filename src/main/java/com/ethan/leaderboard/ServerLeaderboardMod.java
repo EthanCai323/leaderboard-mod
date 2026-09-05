@@ -34,6 +34,10 @@ public class ServerLeaderboardMod implements DedicatedServerModInitializer {
             SidebarScoreboards.startWatcher(server);
             CustomDisplay.loadIfChanged();
             Lang.reloadIfChanged();
+            // zh_cn.json 缺失时后台自动下载中文翻译表，不阻塞启动
+            if (LeaderboardConfig.get().langAutoDownload) {
+                LangDownloader.downloadIfMissing(server);
+            }
             StatFormat.loadStatNamesIfChanged();
             tickCounter = 0;
             long interval = LeaderboardConfig.get().refreshIntervalTicks;
@@ -68,6 +72,7 @@ public class ServerLeaderboardMod implements DedicatedServerModInitializer {
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             LeaderboardGenerator.shutdown();
             SidebarScoreboards.shutdown();
+            LangDownloader.shutdown();
         });
 
         LeaderboardCommands.register();

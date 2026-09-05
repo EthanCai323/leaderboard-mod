@@ -41,6 +41,7 @@ Minecraft 1.21.7 Fabric 服务端模组：自动统计玩家数据并生成排�
 | `/leaderboard screen list` | OP | 查看当前名称筛除特征 |
 | `/leaderboard allowscoreboard [true\|false]` | OP | 设置是否允许普通玩家开启侧边计分板；无参数时查看当前状态 |
 | `/leaderboard reload` | OP | 重新加载全部配置文件并后台重新生成排行榜 |
+| `/leaderboard lang update` | OP | 强制重新下载最新中文翻译表并热加载 |
 | `/leaderboard history [数量]` | OP | 查看或设置历史快照保留数量，0 为关闭；快照保存在 `leaderboard/history/` |
 | `/leaderboard scoreboard on\|off` | 所有人 | 开关个人侧边计分板 |
 | `/leaderboard scoreboard refresh interval [数字[t\|s\|m\|h]]` | OP | 设置计分板主动刷新间隔，设为 0 时跟随排行榜数据更新；无参数时查看当前间隔 |
@@ -59,12 +60,16 @@ leaderboard/
 ├── stat_names.json      # 通用分类统计项中文名（可改，改动自动热重载）
 ├── custom_display.txt   # 自定义模式逐项开关（stat_id true/false）
 ├── history/             # 历史快照归档（leaderboard.json 的带时间戳副本，默认保留 30 份）
-└── lang/zh_cn.json      # 中文翻译表（需自行放置，见下）
+└── lang/zh_cn.json      # 中文翻译表（缺失时自动下载，见下）
 ```
 
 ## 中文翻译表
 
-物品/生物中文名从 `leaderboard/lang/zh_cn.json` 读取，该文件是 Minecraft 客户端官方语言文件（版权属于 Mojang，故不包含在本仓库中）。获取方式：
+物品/生物中文名从 `leaderboard/lang/zh_cn.json` 读取，该文件是 Minecraft 客户端官方语言文件（版权属于 Mojang，故不包含在本仓库中）。
+
+文件缺失时模组会在后台线程自动下载：优先 Mojang 官方源，超时或失败回退 BMCLAPI 国内镜像，下载成功立即热加载生效，不阻塞服务器启动。已手动放置的文件不会被覆盖。可用 `config.json` 的 `langAutoDownload`（默认 true）关闭自动下载。`/leaderboard lang update`（OP）可强制重新下载最新翻译表并热加载。
+
+自动下载失败时也可手动获取：
 
 1. 打开客户端版本目录的 `assets/indexes/<对应索引>.json`，找到 `minecraft/lang/zh_cn.json` 的 hash
 2. 在 `assets/objects/<hash前两位>/<hash>` 找到该文件
