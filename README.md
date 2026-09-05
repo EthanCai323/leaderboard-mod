@@ -34,8 +34,8 @@ Minecraft 1.21.7 Fabric 服务端模组：自动统计玩家数据并生成排�
 | `/leaderboard refresh broadcast [true\|false]` | OP | 开关自动刷新的聊天提示；无参数时查看当前开关 |
 | `/leaderboard mode [compact\|normal\|full\|custom]` | OP | 切换显示模式；无参数时查看当前模式 |
 | `/leaderboard player list` / `list all` | OP | 查看排行榜包含的玩家 / 全部玩家 |
-| `/leaderboard player whitelist add\|remove <玩家>` | OP | 管理白名单（强制包含；加入时自动移出黑名单） |
-| `/leaderboard player blacklist add\|remove <玩家>` | OP | 管理黑名单（强制排除；加入时自动移出白名单） |
+| `/leaderboard player whitelist [add\|remove <玩家>]` | OP | 查看或管理白名单（强制包含；加入时自动移出黑名单） |
+| `/leaderboard player blacklist [add\|remove <玩家>]` | OP | 查看或管理黑名单（强制排除；加入时自动移出白名单） |
 | `/leaderboard screen add prefix\|suffix <特征>` | OP | 添加名称筛除前缀/后缀（默认前缀 bot_，可多次添加） |
 | `/leaderboard screen remove prefix\|suffix <特征>` | OP | 按类型移除名称筛除特征 |
 | `/leaderboard screen list` | OP | 查看当前名称筛除特征 |

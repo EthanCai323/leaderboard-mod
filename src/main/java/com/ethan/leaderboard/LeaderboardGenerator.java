@@ -265,8 +265,11 @@ public final class LeaderboardGenerator {
             }
 
             String top = data.getOverall().get(0);
-            ServerLeaderboardMod.LOGGER.info("[排行榜] 已更新：{} 名玩家，综合第一 {}（{} 分）-> {}",
-                    data.getOverall().size(), top, data.getScore().get(top), htmlPath);
+            // 广播关闭时控制台也不重复输出刷新结果，错误日志与排除提示不受影响
+            if (LeaderboardConfig.get().broadcastRefresh) {
+                ServerLeaderboardMod.LOGGER.info("[排行榜] 已更新：{} 名玩家，综合第一 {}（{} 分）-> {}",
+                        data.getOverall().size(), top, data.getScore().get(top), htmlPath);
+            }
             return true;
         } catch (Exception e) {
             ServerLeaderboardMod.LOGGER.error("[排行榜] 写入输出文件失败", e);
