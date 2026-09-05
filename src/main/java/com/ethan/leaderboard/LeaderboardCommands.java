@@ -31,8 +31,8 @@ import static net.minecraft.server.command.CommandManager.literal;
  * /leaderboard refresh broadcast [true/false] 查看或设置自动刷新广播（仅 OP）
  * /leaderboard mode [模式]                    查看或切换显示模式（仅 OP）
  * /leaderboard player list [all]              玩家名单（仅 OP）
- * /leaderboard player whitelist add/remove <> 白名单管理（仅 OP）
- * /leaderboard player blacklist add/remove <> 黑名单管理（仅 OP）
+ * /leaderboard player whitelist [add/remove <>] 白名单查看与管理（仅 OP）
+ * /leaderboard player blacklist [add/remove <>] 黑名单查看与管理（仅 OP）
  * /leaderboard screen add prefix/suffix <>    添加名称筛除特征（仅 OP）
  * /leaderboard screen remove prefix/suffix <> 按类型移除名称筛除特征（仅 OP）
  * /leaderboard screen list                    查看名称筛除特征（仅 OP）
@@ -83,6 +83,7 @@ public final class LeaderboardCommands {
                                         .then(literal("all")
                                                 .executes(ctx -> playerList(ctx.getSource(), true))))
                                 .then(literal("whitelist")
+                                        .executes(ctx -> showFilterList(ctx.getSource(), true))
                                         .then(literal("add")
                                                 .then(argument("name", StringArgumentType.word())
                                                         .suggests((ctx, builder) -> CommandSource.suggestMatching(
@@ -96,6 +97,7 @@ public final class LeaderboardCommands {
                                                         .executes(ctx -> whitelistRemove(ctx.getSource(),
                                                                 StringArgumentType.getString(ctx, "name"))))))
                                 .then(literal("blacklist")
+                                        .executes(ctx -> showFilterList(ctx.getSource(), false))
                                         .then(literal("add")
                                                 .then(argument("name", StringArgumentType.word())
                                                         .suggests((ctx, builder) -> CommandSource.suggestMatching(
@@ -398,9 +400,9 @@ public final class LeaderboardCommands {
                     .formatted(Formatting.GOLD));
             for (Map.Entry<String, Boolean> e : allPlayers.entrySet()) {
                 if (e.getValue()) {
-                    src.sendMessage(Text.literal(e.getKey() + " - 包含").formatted(Formatting.GREEN));
+                    src.sendMessage(Text.literal(e.getKey()).formatted(Formatting.GREEN));
                 } else {
-                    src.sendMessage(Text.literal(e.getKey() + " - 排除").formatted(Formatting.GRAY));
+                    src.sendMessage(Text.literal(e.getKey()).formatted(Formatting.GRAY));
                 }
             }
             return 1;
@@ -414,6 +416,23 @@ public final class LeaderboardCommands {
                 .formatted(Formatting.GOLD));
         for (String name : data.getOverall()) {
             src.sendMessage(Text.literal(name).formatted(Formatting.GREEN));
+        }
+        return 1;
+    }
+
+    /** 查看白名单或黑名单玩家，空名单给出对应提示 */
+    private static int showFilterList(ServerCommandSource src, boolean whitelist) {
+        List<String> names = whitelist ? PlayerFilter.whitelistSnapshot() : PlayerFilter.blacklistSnapshot();
+        String label = whitelist ? "白名单" : "黑名单";
+        if (names.isEmpty()) {
+            src.sendMessage(Text.literal(label + "为空").formatted(Formatting.GRAY));
+            return 0;
+        }
+        src.sendMessage(Text.literal("—— " + label + "玩家，共 " + names.size() + " 人 ——")
+                .formatted(Formatting.GOLD));
+        Formatting color = whitelist ? Formatting.GREEN : Formatting.GRAY;
+        for (String name : names) {
+            src.sendMessage(Text.literal(name).formatted(color));
         }
         return 1;
     }
@@ -637,9 +656,9 @@ public final class LeaderboardCommands {
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard player list [all] - 查看玩家名单")
                     .formatted(Formatting.GRAY));
-            src.sendMessage(Text.literal("/leaderboard player whitelist add/remove <玩家名> - 管理白名单")
+            src.sendMessage(Text.literal("/leaderboard player whitelist [add/remove <玩家名>] - 查看或管理白名单")
                     .formatted(Formatting.GRAY));
-            src.sendMessage(Text.literal("/leaderboard player blacklist add/remove <玩家名> - 管理黑名单")
+            src.sendMessage(Text.literal("/leaderboard player blacklist [add/remove <玩家名>] - 查看或管理黑名单")
                     .formatted(Formatting.GRAY));
             src.sendMessage(Text.literal("/leaderboard screen add prefix|suffix <特征> - 添加名称筛除特征")
                     .formatted(Formatting.GRAY));
