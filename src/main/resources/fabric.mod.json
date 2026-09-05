@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "server-leaderboard",
-  "version": "1.4.1+mc1.21.7",
+  "version": "1.4.2+mc1.21.7",
   "name": "Server Leaderboard",
   "description": "每小时自动统计玩家数据，生成排行榜网页与 JSON，并提供 /leaderboard 指令。",
   "authors": ["Ethan"],
